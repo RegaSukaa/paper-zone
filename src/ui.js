@@ -170,7 +170,7 @@
       ctx.restore();
 
       // сам персонаж
-      var scale = Math.min(W, H) / 150;
+      var scale = Math.min(W, H) / 12.5;
       PIO.drawSkin(ctx, skin.id, px, py, ang + Math.PI / 2, scale * 1.15, {
         t: t, move: 1, squash: Math.max(0, Math.sin(t * 6)) * 0.4
       });
@@ -224,7 +224,11 @@
       document.getElementById('opt-size').value = cfg.mapSize;
       document.getElementById('opt-speed').value = String(cfg.speed);
       document.getElementById('opt-speed-value').textContent = cfg.speed;
-      document.getElementById('free-options').style.opacity = cfg.mode === 'free' ? '1' : '0.45';
+      var free = document.getElementById('free-options');
+      free.classList.toggle('is-off', cfg.mode !== 'free');
+      document.getElementById('free-hint').textContent = cfg.mode === 'free'
+        ? 'Действует только в свободной игре'
+        : 'Доступно в режиме «Свободная игра»';
     },
 
     syncSettings: function (s) {
@@ -286,9 +290,8 @@
       var me = game.players[0];
       if (me && me.alive && top.indexOf(me) === -1) top.push(me);
       var board = document.getElementById('board');
-      var html = top.map(function (p) {
-        var cells = game.grid.ownerCount(p.id);
-        return '<li class="' + (p.id === 1 ? 'is-me' : '') + '">' +
+      var html = top.map(function (p, idx) {
+        return '<li class="rank-' + (idx + 1) + (p.id === 1 ? ' is-me' : '') + '">' +
           '<i style="background:' + p.palette.land + '"></i>' +
           '<span>' + (p.id === 1 ? 'Ты' : p.name) + '</span>' +
           '<b>' + game.grid.percent(p.id).toFixed(1) + '%</b></li>';

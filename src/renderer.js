@@ -123,8 +123,17 @@
           if (!id) continue;
           skin = this.skinById[id] || PIO.SKINS[0];
           land = rgb(skin.land);
-          // лёгкая вариация тона по клеткам — «бумажная» фактура, без шума
-          var v = ((x * 7 + y * 13) % 5) * 2;
+          // тематический узор поверхности: точки, полосы, волны, грани
+          var v = 0;
+          switch (skin.texture) {
+            case 'dots':    v = (x % 7 === 0 && y % 7 === 0) ? 16 : ((x + y) % 3 === 0 ? 2 : 0); break;
+            case 'stripes': v = ((x + y) % 11 < 3) ? 12 : 0; break;
+            case 'waves':   v = (Math.sin(x * 0.55) + Math.cos(y * 0.7) > 1.1) ? 12 : 0; break;
+            case 'grid':    v = (x % 8 === 0 || y % 8 === 0) ? 14 : 0; break;
+            case 'facets':  v = ((x * 3 + y * 5) % 13 < 2) ? 14 : 0; break;
+            case 'streaks': v = ((x * 2 + y) % 9 < 2) ? 13 : 0; break;
+            default:        v = ((x * 7 + y * 13) % 5) * 2;
+          }
           fd[o] = Math.min(255, land[0] + v);
           fd[o + 1] = Math.min(255, land[1] + v);
           fd[o + 2] = Math.min(255, land[2] + v);
@@ -208,7 +217,7 @@
       } else {
         tx = this.camTarget.x; ty = this.camTarget.y;
       }
-      var visible = Math.min(this.viewW, this.viewH) < 620 ? 26 : 38;
+      var visible = Math.min(this.viewW, this.viewH) < 620 ? 21 : 30;
       var targetZoom = Math.min(this.viewW, this.viewH) / visible;
       this.cam.zoom += (targetZoom - this.cam.zoom) * Math.min(1, dt * 3.5);
 
@@ -265,12 +274,30 @@
       var W = this.viewW, H = this.viewH;
       ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
 
-      // фон вне арены
+      // фон вне арены: пастель с мягкими пятнами
       var bg = ctx.createLinearGradient(0, 0, W, H);
-      bg.addColorStop(0, '#e9e4d8');
-      bg.addColorStop(1, '#dcd5c6');
+      bg.addColorStop(0, '#eaf3ef');
+      bg.addColorStop(0.55, '#e6eef6');
+      bg.addColorStop(1, '#f2ece1');
       ctx.fillStyle = bg;
       ctx.fillRect(0, 0, W, H);
+      if (!this.blobs) {
+        this.blobs = [
+          { x: 0.18, y: 0.16, r: 0.30, c: 'rgba(120, 220, 190, 0.22)' },
+          { x: 0.82, y: 0.22, r: 0.26, c: 'rgba(130, 180, 255, 0.20)' },
+          { x: 0.68, y: 0.86, r: 0.34, c: 'rgba(255, 200, 130, 0.20)' },
+          { x: 0.10, y: 0.78, r: 0.24, c: 'rgba(255, 160, 190, 0.16)' }
+        ];
+      }
+      for (var bi = 0; bi < this.blobs.length; bi++) {
+        var bl = this.blobs[bi];
+        var bx = bl.x * W, by = bl.y * H, br = bl.r * Math.max(W, H);
+        var rg = ctx.createRadialGradient(bx, by, 0, bx, by, br);
+        rg.addColorStop(0, bl.c);
+        rg.addColorStop(1, 'rgba(255,255,255,0)');
+        ctx.fillStyle = rg;
+        ctx.fillRect(bx - br, by - br, br * 2, br * 2);
+      }
 
       var g = this.game;
       if (!g) return;
@@ -300,9 +327,14 @@
       var g = this.game.grid;
       var z = this.cam.zoom;
 
-      // бумага арены
+      // тень под «листом» арены
+      ctx.save();
+      ctx.shadowColor = 'rgba(40, 50, 40, 0.16)';
+      ctx.shadowBlur = 18 / z;
+      ctx.shadowOffsetY = 6 / z;
       ctx.fillStyle = '#f6f2e9';
       ctx.fillRect(0, 0, g.w, g.h);
+      ctx.restore();
 
       // точки-сетка
       if (this.dotPattern) {
@@ -336,25 +368,28 @@
       ctx.fillRect(0, g.h - inset, g.w, inset);
 
       // опасная кромка
-      ctx.lineWidth = 3 / z;
-      ctx.strokeStyle = 'rgba(226,90,74,0.55)';
+      ctx.lineWidth = 2 / z;
+      ctx.strokeStyle = 'rgba(226,90,74,0.32)';
       ctx.strokeRect(0.5, 0.5, g.w - 1, g.h - 1);
       ctx.lineWidth = 14 / z;
-      ctx.strokeStyle = 'rgba(226,90,74,0.10)';
+      ctx.strokeStyle = 'rgba(226,90,74,0.07)';
       ctx.strokeRect(0.5, 0.5, g.w - 1, g.h - 1);
     }
 
     drawTerritory(ctx) {
       var g = this.game.grid;
+      var smooth = ctx.imageSmoothingEnabled;
+      ctx.imageSmoothingEnabled = false;
       // тень
-      ctx.globalAlpha = 0.5;
-      ctx.drawImage(this.shadow, 0, 1.1, g.w, g.h);
+      ctx.globalAlpha = 0.34;
+      ctx.drawImage(this.shadow, 0, 1.0, g.w, g.h);
       // заливка
       ctx.globalAlpha = 1;
       ctx.drawImage(this.terr, 0, 0, g.w, g.h);
       // светлый контур
       ctx.globalAlpha = 1;
       ctx.drawImage(this.edge, 0, 0, g.w, g.h);
+      ctx.imageSmoothingEnabled = smooth;
     }
 
     drawTrails(ctx) {
@@ -427,6 +462,17 @@
         var skin = this.skinById[p.id] || PIO.skinById(p.skinId);
         var speedFactor = p.trail && p.trail.size > 0 ? 1 : 0.55;
         var scale = 1.28;
+
+        // мягкий ореол: персонаж читается на любом цвете территории
+        var haloR = i === 0 ? 3.1 : 2.5;
+        var hg = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, haloR);
+        hg.addColorStop(0, 'rgba(255,255,255,0.22)');
+        hg.addColorStop(0.45, p.palette.head + '66');
+        hg.addColorStop(1, 'rgba(255,255,255,0)');
+        ctx.fillStyle = hg;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, haloR, 0, TAU);
+        ctx.fill();
         PIO.drawSkin(ctx, skin.id, p.x, p.y, p.angle, scale, {
           t: t + p.bob,
           move: speedFactor,
@@ -461,7 +507,7 @@
       var g = this.game.grid;
       var size = W < 620 ? 74 : 104;
       var pad = W < 620 ? 10 : 16;
-      var x = W - size - pad;
+      var x = pad;
       var y = H - size - pad;
       var scale = (size - 8) / Math.max(g.w, g.h);
       var mw = g.w * scale, mh = g.h * scale;

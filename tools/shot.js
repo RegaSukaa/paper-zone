@@ -26,7 +26,8 @@ const playScript = `
       if (!PZ2 || !PZ2.game || !PZ2.game.human) return;
       var h = PZ2.game.human;
       var head = PZ2.renderer.worldToScreen(h.x, h.y);
-      var a = (performance.now() - t0) / 1000 * 1.15;
+      // скорость поворота подобрана под радиус 190 px: игрок идёт по кругу
+      var a = (performance.now() - t0) / 1000 * 1.55;
       var px = head.x + Math.cos(a) * 190;
       var py = head.y + Math.sin(a) * 190;
       window.dispatchEvent(new PointerEvent('pointermove', {
@@ -76,7 +77,7 @@ const menuPage = build('_shot_menu.html');
 const gamePage = build('_shot_game.html', playScript);
 
 shot(menuPage, 'screen-menu.png', '1280,800', 5000);
-shot(gamePage, 'screen-game.png', '1000,650', 4000);
+shot(gamePage, 'screen-game.png', '1000,650', 3400);
 shot(menuPage, 'screen-mobile.png', '420,900', 5000);
 
 for (const f of [menuPage, gamePage]) {

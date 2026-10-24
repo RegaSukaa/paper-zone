@@ -70,7 +70,7 @@
 
   var list = [
     {
-      id: 'mint', name: 'Мята', tag: 'слизь',
+      id: 'mint', texture: 'dots', name: 'Мята', tag: 'слизь',
       land: '#22c39a', land2: '#0f9a78', edge: '#7ff3d0', trail: '#31dcae',
       head: '#5cf0c6', dark: '#0b3a2e', accent: '#e9fff8',
       draw: function (ctx, o) {
@@ -98,7 +98,7 @@
       }
     },
     {
-      id: 'astro', name: 'Астронавт', tag: 'скафандр',
+      id: 'astro', texture: 'stripes', name: 'Астронавт', tag: 'скафандр',
       land: '#4f7fe8', land2: '#2b53b8', edge: '#9fc0ff', trail: '#6f9bff',
       head: '#dfe9ff', dark: '#1b2b52', accent: '#ffd166',
       draw: function (ctx, o) {
@@ -155,7 +155,7 @@
       }
     },
     {
-      id: 'robot', name: 'Робот', tag: 'механика',
+      id: 'robot', texture: 'grid', name: 'Робот', tag: 'механика',
       land: '#7b8fa8', land2: '#4f6076', edge: '#c6d6ea', trail: '#93a9c4',
       head: '#dbe6f5', dark: '#1d2836', accent: '#49e0ff',
       draw: function (ctx, o) {
@@ -202,7 +202,7 @@
       }
     },
     {
-      id: 'flame', name: 'Пламя', tag: 'огонь',
+      id: 'flame', texture: 'waves', name: 'Пламя', tag: 'огонь',
       land: '#f2701d', land2: '#b93a08', edge: '#ffc46b', trail: '#ff9a3c',
       head: '#ffd166', dark: '#3a1200', accent: '#fff1b8',
       draw: function (ctx, o) {
@@ -230,7 +230,7 @@
       }
     },
     {
-      id: 'crystal', name: 'Кристалл', tag: 'минерал',
+      id: 'crystal', texture: 'facets', name: 'Кристалл', tag: 'минерал',
       land: '#8a5cf6', land2: '#5a2fc4', edge: '#d3b6ff', trail: '#a97dff',
       head: '#c9a8ff', dark: '#2a1553', accent: '#f0e5ff',
       draw: function (ctx, o) {
@@ -264,7 +264,7 @@
       }
     },
     {
-      id: 'bolt', name: 'Разряд', tag: 'энергия',
+      id: 'bolt', texture: 'streaks', name: 'Разряд', tag: 'энергия',
       land: '#e8c400', land2: '#a98f00', edge: '#fff58a', trail: '#ffe23c',
       head: '#fff08a', dark: '#33280a', accent: '#ffffff',
       draw: function (ctx, o) {
@@ -292,7 +292,7 @@
       }
     },
     {
-      id: 'drone', name: 'Дрон', tag: 'техника',
+      id: 'drone', texture: 'grid', name: 'Дрон', tag: 'техника',
       land: '#0fa3c4', land2: '#0a6f8a', edge: '#7fe6ff', trail: '#2ec8e8',
       head: '#c9f4ff', dark: '#06303c', accent: '#ff7ab6',
       draw: function (ctx, o) {
@@ -336,7 +336,7 @@
       }
     },
     {
-      id: 'jelly', name: 'Желе', tag: 'гель',
+      id: 'jelly', texture: 'dots', name: 'Желе', tag: 'гель',
       land: '#ef6aa8', land2: '#bb3a78', edge: '#ffb3d4', trail: '#ff85bd',
       head: '#ffc2dd', dark: '#4a1030', accent: '#ffe3f1',
       draw: function (ctx, o) {
@@ -369,7 +369,7 @@
       }
     },
     {
-      id: 'cat', name: 'Неон-кот', tag: 'зверь',
+      id: 'cat', texture: 'stripes', name: 'Неон-кот', tag: 'зверь',
       land: '#13b8a6', land2: '#0a7f74', edge: '#7cf7e6', trail: '#2fe0cb',
       head: '#b8fff4', dark: '#04322d', accent: '#ff7ad9',
       draw: function (ctx, o) {
@@ -417,7 +417,7 @@
       }
     },
     {
-      id: 'ghost', name: 'Призрак', tag: 'дух',
+      id: 'ghost', texture: 'waves', name: 'Призрак', tag: 'дух',
       land: '#8fa6d8', land2: '#5a6f9e', edge: '#dfe9ff', trail: '#a9bdff',
       head: '#eef3ff', dark: '#232c44', accent: '#9ad7ff',
       draw: function (ctx, o) {
@@ -464,7 +464,7 @@
     ctx.scale(scale, scale);
     // контактная тень
     ctx.beginPath();
-    ctx.ellipse(0, scale * 0.42, 0.95, 0.42, 0, 0, Math.PI * 2);
+    ctx.ellipse(0, 0.56, 0.92, 0.30, 0, 0, Math.PI * 2);
     ctx.fillStyle = 'rgba(17,26,43,0.18)';
     ctx.fill();
     ctx.rotate(angle);
