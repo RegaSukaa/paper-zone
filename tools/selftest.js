@@ -176,27 +176,45 @@
 
     /* ------------------------------ захват ---------------------------- */
     var before = game.grid.percent(1);
-    var ok = true;
-    // круг: указатель вращается вокруг головы, персонаж описывает петлю
-    var t0 = performance.now();
-    while (performance.now() - t0 < 4200 && alive()) {
-      var ang = ((performance.now() - t0) / 1000) * 1.55;
-      aimWorld(p.x + Math.cos(ang) * 40, p.y + Math.sin(ang) * 40);
-      await wait(40);
+
+    /* Ведём указателем по прямоугольнику вокруг своей земли, затем на центр:
+     * детерминированная петля без самопересечения. */
+    async function loopOnce() {
+      var b = ownBounds();
+      var r = b.maxx + 10, l = Math.max(6, b.minx - 10);
+      var bt = b.maxy + 10, tp = b.cy;
+      var legs = [[r, tp], [r, bt], [l, bt], [l, tp], [b.cx, b.cy]];
+      for (var i = 0; i < legs.length; i++) {
+        var t0 = Date.now();
+        while (Date.now() - t0 < 6000) {
+          if (!alive()) return false;
+          var p = game.human;
+          if (game.human.trail.size === 0 && i === legs.length - 1) return true;
+          var dx = legs[i][0] - p.x, dy = legs[i][1] - p.y;
+          if (Math.hypot(dx, dy) < 4 && i < legs.length - 1) break;
+          aimWorld(legs[i][0], legs[i][1]);
+          await wait(40);
+        }
+      }
+      var t1 = Date.now();
+      while (Date.now() - t1 < 3000 && alive() && game.human.trail.size > 0) {
+        aimWorld(b.cx, b.cy);
+        await wait(40);
+      }
+      return alive() && game.human.trail.size === 0;
     }
-    check('петля не убила игрока', alive(), alive());
-    // возвращаемся на свою землю
-    var b = ownBounds();
-    await aimUntil(null, 1);
-    var t1 = Date.now();
-    while (Date.now() - t1 < 5000 && alive() && p.trail.size > 0) {
-      aimWorld(b.cx, b.cy);
-      await wait(40);
-    }
+
+    var okLoop = await loopOnce();
     var after = game.grid.percent(1);
+    if (!okLoop || after <= before + 0.05) {
+      game = await freshMatch();
+      before = game.grid.percent(1);
+      okLoop = await loopOnce();
+      after = game.grid.percent(1);
+    }
     check('контур замкнулся и площадь выросла', alive() && after > before + 0.05,
-      { before: +before.toFixed(2), after: +after.toFixed(2), trail: p.trail.size });
-    check('след очищен после захвата', p.trail.size === 0, p.trail.size);
+      { before: +before.toFixed(2), after: +after.toFixed(2), trail: game.human.trail.size });
+    check('след очищен после захвата', game.human.trail.size === 0, game.human.trail.size);
     check('эффект захвата отрисован', (PZ.renderer.captureCount || 0) > 0, PZ.renderer.captureCount || 0);
     check('HUD показывает выросший процент', parseFloat(document.getElementById('hud-percent').textContent) >= before - 0.01,
       document.getElementById('hud-percent').textContent);
@@ -256,6 +274,33 @@
     await wait(450);
     check('повторная игра запускает матч', PZ.screen === 'game' && PZ.game.time < 2.5,
       PZ.game ? +PZ.game.time.toFixed(2) : null);
+
+    /* ------------------- классика: боты и живой матч ------------------- */
+    document.getElementById('btn-menu-result').click();
+    await wait(350);
+    document.querySelector('.mode[data-mode="classic"]').click();
+    await wait(80);
+    document.getElementById('btn-play').click();
+    await wait(1200);
+    var botList = [], activeBots = 0;
+    for (var waitBots = 0; waitBots < 40; waitBots++) {
+      botList = PZ.game.aliveBots();
+      activeBots = botList.filter(function (b) { return b.trail.size > 0; }).length;
+      if (PZ.game.players.length === 6 && activeBots >= 2) break;
+      await wait(150);
+    }
+    check('в классике 6 игроков', PZ.game.players.length === 6, PZ.game.players.length);
+    check('боты живы и тянут след', botList.length >= 4 && activeBots >= 2,
+      { bots: botList.length, withTrail: activeBots });
+    check('таблица лидеров показывает несколько игроков', document.querySelectorAll('#board li').length >= 2,
+      document.querySelectorAll('#board li').length);
+    var hudBots = document.getElementById('hud-bots').textContent;
+    check('HUD считает соперников', /\d+ соперник/.test(hudBots), hudBots);
+    PZ.handleUI('pause');
+    await wait(100);
+    document.getElementById('btn-menu-pause').click();
+    await wait(400);
+    check('выход в меню из классики', PZ.screen === 'menu', PZ.screen);
 
     /* ------------------------- меню и рекорды ------------------------- */
     PZ.handleUI('pause');

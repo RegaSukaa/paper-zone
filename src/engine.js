@@ -91,8 +91,7 @@
           return { bots: clamp(c.botCount | 0, 0, MAX_PLAYERS - 1), timeLimit: 0, survivalGoal: 0,
             spawnEvery: 0, maxBots: MAX_PLAYERS - 1, goalPercent: 0, difficulty: d };
         default:
-          return { bots: clamp(c.botCount | 0, 1, MAX_PLAYERS - 1), timeLimit: 0, survivalGoal: 0,
-            spawnEvery: 0, maxBots: clamp(c.botCount | 0, 1, MAX_PLAYERS - 1),
+          return { bots: 5, timeLimit: 0, survivalGoal: 0, spawnEvery: 0, maxBots: 5,
             goalPercent: c.goalPercent || 30, difficulty: d };
       }
     }
