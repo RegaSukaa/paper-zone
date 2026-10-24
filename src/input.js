@@ -165,7 +165,17 @@
             if (st.knob && st.knob.parentNode) st.knob.parentNode.classList.add('is-hidden');
           }
         },
-        currentAngle: function () { return st.angle; }
+        currentAngle: function () { return st.angle; },
+
+        /* Курс по последнему положению мыши: матч начинается не «в стену»,
+         * а туда, где стоит указатель. */
+        applyLastPointer: function () {
+          if (!st.mouse || !st.mouse.seen) return false;
+          var a = angleToHead(st.mouse.x, st.mouse.y);
+          if (a === null) return false;
+          emit(a);
+          return true;
+        }
       };
     }
   };
