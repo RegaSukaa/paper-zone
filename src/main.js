@@ -363,6 +363,9 @@
   startAttract();
   requestAnimationFrame(rafLoop);
 
+  /* ?play=1 — сразу в бой: удобно для демо и скриншотов на хостинге */
+  if (/[?&]play=1/.test(location.search)) setTimeout(startMatch, 60);
+
   /* отладочные хуки для браузерных проверок */
   window.__PZ = {
     get game() { return game; },
