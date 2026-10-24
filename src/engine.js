@@ -24,6 +24,15 @@
   var PHYS = C.PHYS;
   var SKINS = deps.Skins.SKINS;
   var skinById = deps.Skins.skinById;
+  /* Ники ботов: короткие, «иo»-шные, без цифр и без обидного. */
+  var BOT_NAMES = [
+    'Кувалда', 'Пиксель', 'Вихрь', 'Шустрик', 'Ниндзя', 'Барон', 'Титан', 'Оса',
+    'Фантом', 'Комета', 'Зефир', 'Кактус', 'Буран', 'Кобра', 'Магма', 'Нейрон',
+    'Оникс', 'Пингвин', 'Ракета', 'Скарабей', 'Тайфун', 'Уголёк', 'Феникс', 'Хаос',
+    'Циклон', 'Шершень', 'Юпитер', 'Ястреб', 'Барс', 'Гром', 'Дизель', 'Жнец',
+    'Зигзаг', 'Импульс', 'Клинок', 'Лавина', 'Мираж', 'Прайд', 'Радар', 'Сокол'
+  ];
+
   var MAX_PLAYERS = C.MAX_PLAYERS;
   var clamp = C.clamp;
   var bitOf = C.bitOf;
@@ -34,7 +43,7 @@
   var FIXED_STEP = 1 / 60;
 
   var MODE_INFO = {
-    classic: { title: 'Классика', desc: 'Против ботов. Победа — 30% карты или все соперники.' },
+    classic: { title: 'Классика', desc: 'Против ботов. Победа — 25% карты или все соперники.' },
     survival: { title: 'Выживание', desc: 'Соперники прибывают. Продержись 150 секунд.' },
     quick: { title: 'Быстрый матч', desc: '90 секунд. Побеждает больший процент территории.' },
     free: { title: 'Свободная игра', desc: 'Свои настройки: боты, размер карты, скорость.' }
@@ -43,13 +52,13 @@
   var DEFAULTS = {
     mode: 'classic',
     difficulty: 'medium',
-    mapW: 160,
-    mapH: 160,
+    mapW: 220,
+    mapH: 220,
     botCount: 5,
     speed: PHYS.speed,
     playerSkin: 'mint',
     seed: 20261024,
-    goalPercent: 30,
+    goalPercent: 25,
     survivalGoal: 150,
     timeLimit: 90,
     autopilot: false
@@ -91,12 +100,25 @@
           return { bots: clamp(c.botCount | 0, 0, MAX_PLAYERS - 1), timeLimit: 0, survivalGoal: 0,
             spawnEvery: 0, maxBots: MAX_PLAYERS - 1, goalPercent: 0, difficulty: d };
         default:
-          return { bots: 5, timeLimit: 0, survivalGoal: 0, spawnEvery: 0, maxBots: 5,
-            goalPercent: c.goalPercent || 30, difficulty: d };
+          return { bots: 6, timeLimit: 0, survivalGoal: 0, spawnEvery: 0, maxBots: 6,
+            goalPercent: c.goalPercent || 25, difficulty: d };
       }
     }
 
     /* ------------------------------ старт ------------------------------ */
+
+    nextName() {
+      if (!this._namePool || !this._namePool.length) {
+        var pool = BOT_NAMES.slice();
+        for (var i = pool.length - 1; i > 0; i--) {
+          var j = Math.floor(this.rng() * (i + 1));
+          var t = pool[i]; pool[i] = pool[j]; pool[j] = t;
+        }
+        this._namePool = pool;
+        this._nameUsed = 0;
+      }
+      return this._namePool[this._nameUsed++ % this._namePool.length];
+    }
 
     setup() {
       var grid = this.grid;
@@ -119,7 +141,7 @@
         var outward = Math.atan2(py - cy, px - cx);
         this.addPlayer({
           id: i + 1, isBot: !isHuman || !!this.cfg.autopilot,
-          name: isHuman ? 'Ты' : 'Бот ' + i,
+          name: isHuman ? 'Ты' : this.nextName(),
           x: px + 0.5, y: py + 0.5, angle: outward, skinId: skin, startSize: size
         });
       }
@@ -306,7 +328,11 @@
       p.deathCause = cause;
       this.grid.clearTrail(p.id);
       p.clearTrail();
-      if (p.id !== 1) this.grid.releaseTerritory(p.id);
+      if (killer && killer.alive && killer.id !== p.id) {
+        this.grid.transferTerritory(p.id, killer.id);
+      } else if (p.id !== 1) {
+        this.grid.releaseTerritory(p.id);
+      }
       if (killer && killer.alive && killer.id !== p.id) killer.kills++;
       if (p.bot) p.bot = null;
       if (p.isBot && p.id !== 1) this.respawns.push({ player: p, at: this.time + 6 });
@@ -427,7 +453,7 @@
         if (!free) continue;
         var level = this.time > 70 ? 'hard' : (this.time > 35 ? 'medium' : this.difficulty);
         var p = this.addPlayer({
-          id: id, isBot: true, name: 'Бот ' + id,
+          id: id, isBot: true, name: this.nextName(),
           x: x + 0.5, y: y + 0.5, angle: this.rng() * TAU,
           skinId: this.pickSkin(this.players.map(function (q) { return q.skinId; })),
           startSize: size

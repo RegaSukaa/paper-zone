@@ -7,7 +7,7 @@
   var PIO = window.PIO;
   var $ = function (id) { return document.getElementById(id); };
   var STEP = PIO.FIXED_STEP;
-  var SIZE_MAP = { small: 120, medium: 160, large: 220 };
+  var SIZE_MAP = { small: 160, medium: 220, large: 280 };
 
   var canvas = $('field');
   var renderer = new PIO.Renderer(canvas);
@@ -52,7 +52,7 @@
   function startMatch() {
     var mapSize = config.mode === 'free'
       ? (SIZE_MAP[config.mapSize] || 160)
-      : (config.mode === 'quick' ? 150 : 160);
+      : (config.mode === 'quick' ? 190 : 220);
     var speed = config.mode === 'free' ? config.speed : 13.5;
     var seed = (Date.now() ^ ((Math.random() * 0xffffffff) >>> 0)) >>> 0;
 

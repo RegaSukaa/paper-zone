@@ -1,13 +1,19 @@
 'use strict';
 const test = require('node:test');
+
+function countNeutral(grid) {
+  let n = 0;
+  for (let i = 0; i < grid.size; i++) if (grid.owner[i] === 0) n++;
+  return n;
+}
 const assert = require('node:assert/strict');
 const { Game, PHYS, arena, place, driveTo, hashGame } = require('./helpers.js');
 
 test('классический матч стартует с игроком и ботами, у каждого своя земля', () => {
   const game = new Game({ mode: 'classic', mapW: 140, mapH: 140, seed: 42 });
-  assert.equal(game.players.length, 6);
+  assert.equal(game.players.length, 7);
   assert.equal(game.players[0].isBot, false);
-  assert.equal(game.aliveBots().length, 5);
+  assert.equal(game.aliveBots().length, 6);
   const size = game.startSize;
   for (const p of game.players) {
     assert.equal(game.grid.ownerCount(p.id), size * size, `стартовая площадь игрока ${p.id}`);
@@ -40,7 +46,7 @@ test('боты живут, расширяются и не убиваются о 
   assert.ok(captures.size >= 2, `захватывали территорию ${captures.size} игроков`);
   const total = alive.reduce((s, p) => s + game.grid.ownerCount(p.id), 0);
   assert.ok(total >= alive.length * 81, `суммарная земля живых: ${total}`);
-  assert.ok(start.size === 6, 'шесть игроков на старте');
+  assert.ok(start.size === 7, 'семь игроков на старте');
 });
 
 test('на всех уровнях сложности боты играют и расширяются', () => {
@@ -172,7 +178,7 @@ test('счёт и статистика считаются из реальных 
   assert.equal(st.percent, game.grid.percent(1));
   assert.equal(st.cells, game.grid.ownerCount(1));
   assert.equal(st.kills, 2);
-  assert.equal(st.botsAlive, 5);
+  assert.equal(st.botsAlive, 6);
   assert.equal(st.score, Math.round(st.percent * 100 + 2 * 200 + 10 * 2));
 });
 
@@ -183,7 +189,7 @@ test('новый матч после завершения создаётся ч�
   assert.equal(second.time, 0);
   assert.equal(second.state, 'playing');
   assert.equal(second.events.filter(e => e.type !== 'spawn').length, 0);
-  assert.equal(second.players.length, 6);
+  assert.equal(second.players.length, 7);
 });
 
 test('захват в реальном матче даёт процент и событие', () => {
@@ -203,4 +209,45 @@ test('захват в реальном матче даёт процент и с�
   assert.ok(events.length >= 1, 'событие захвата есть');
   assert.ok(game.grid.percent(1) > before + 1);
   assert.equal(game.human.trail.size, 0);
+});
+
+test('убийство переводит всю землю жертвы убийце', () => {
+  const game = new Game({ mode: 'classic', mapW: 140, mapH: 140, seed: 7 });
+  const human = game.players[0];
+  const bot = game.players[1];
+  const botLand = game.grid.ownerCount(bot.id);
+  const mine = game.grid.ownerCount(human.id);
+  const neutralBefore = countNeutral(game.grid);
+  assert.ok(botLand > 0 && mine > 0);
+
+  game.kill(bot, 'cut', human);
+
+  assert.equal(game.grid.ownerCount(bot.id), 0, 'у жертвы не осталось клеток');
+  assert.equal(game.grid.ownerCount(human.id), mine + botLand, 'убийца получил всё');
+  assert.equal(bot.alive, false);
+  // ни одной «ничейной» дыры на месте чужой земли
+  assert.equal(countNeutral(game.grid), neutralBefore, 'нейтральных клеток не прибавилось');
+});
+
+test('смерть о стену отдаёт землю в нейтрал, а не убийце', () => {
+  const game = new Game({ mode: 'classic', mapW: 140, mapH: 140, seed: 11 });
+  const human = game.players[0];
+  const bot = game.players[1];
+  const botLand = game.grid.ownerCount(bot.id);
+  const mine = game.grid.ownerCount(human.id);
+  const neutralBefore = countNeutral(game.grid);
+  game.kill(bot, 'wall');
+  assert.equal(game.grid.ownerCount(bot.id), 0);
+  assert.equal(game.grid.ownerCount(human.id), mine, 'стена не отдаёт землю игроку');
+  assert.equal(countNeutral(game.grid), neutralBefore + botLand, 'земля ушла в нейтрал');
+});
+
+test('ники ботов уникальны и не шаблонные', () => {
+  const game = new Game({ mode: 'classic', mapW: 140, mapH: 140, seed: 3 });
+  const names = game.players.slice(1).map(p => p.name);
+  assert.equal(new Set(names).size, names.length, 'ники не повторяются');
+  for (const n of names) {
+    assert.ok(!/^Бот\s*\d+$/.test(n), 'нет имён вида «Бот 1»: ' + n);
+    assert.ok(n.length >= 3);
+  }
 });

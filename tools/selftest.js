@@ -101,6 +101,25 @@
       return !document.getElementById('screen-menu').classList.contains('is-hidden');
     }
 
+    function minimapLand() {
+      var r = PZ.renderer.minimapRect;
+      if (!r) return 0;
+      var dpr = PZ.renderer.dpr || 1;
+      var ctx = PZ.renderer.canvas.getContext('2d');
+      var img;
+      try {
+        img = ctx.getImageData(r.x * dpr, r.y * dpr, r.size * dpr, r.size * dpr).data;
+      } catch (e) { return 0; }
+      var def = (window.PIO && window.PIO.skinById) ? window.PIO.skinById(PZ.save.skinId) : null;
+      var hex = (def ? def.land : '#22c39a').replace('#', '');
+      var lr = parseInt(hex.slice(0, 2), 16), lg = parseInt(hex.slice(2, 4), 16), lb = parseInt(hex.slice(4, 6), 16);
+      var hits = 0;
+      for (var i = 0; i < img.length; i += 4) {
+        if (Math.abs(img[i] - lr) + Math.abs(img[i + 1] - lg) + Math.abs(img[i + 2] - lb) < 60) hits++;
+      }
+      return hits;
+    }
+
     async function freshMatch() {
       PZ.startMatch();
       await wait(420);
@@ -176,6 +195,7 @@
 
     /* ------------------------------ захват ---------------------------- */
     var before = game.grid.percent(1);
+    var mmBefore = minimapLand();
 
     /* Ведём указателем по прямоугольнику вокруг своей земли, затем на центр:
      * детерминированная петля без самопересечения. */
@@ -216,6 +236,11 @@
       { before: +before.toFixed(2), after: +after.toFixed(2), trail: game.human.trail.size });
     check('след очищен после захвата', game.human.trail.size === 0, game.human.trail.size);
     check('эффект захвата отрисован', (PZ.renderer.captureCount || 0) > 0, PZ.renderer.captureCount || 0);
+    /* мини-карта: земли игрока на ней должно стать больше после захвата */
+    var mmAfter = minimapLand();
+    check('мини-карта показывает землю игрока', mmAfter > mmBefore + 20,
+      { before: mmBefore, after: mmAfter });
+
     check('HUD показывает выросший процент', parseFloat(document.getElementById('hud-percent').textContent) >= before - 0.01,
       document.getElementById('hud-percent').textContent);
 
@@ -286,10 +311,10 @@
     for (var waitBots = 0; waitBots < 40; waitBots++) {
       botList = PZ.game.aliveBots();
       activeBots = botList.filter(function (b) { return b.trail.size > 0; }).length;
-      if (PZ.game.players.length === 6 && activeBots >= 2) break;
+      if (PZ.game.players.length === 7 && activeBots >= 2) break;
       await wait(150);
     }
-    check('в классике 6 игроков', PZ.game.players.length === 6, PZ.game.players.length);
+    check('в классике 7 игроков', PZ.game.players.length === 7, PZ.game.players.length);
     check('боты живы и тянут след', botList.length >= 4 && activeBots >= 2,
       { bots: botList.length, withTrail: activeBots });
     check('таблица лидеров показывает несколько игроков', document.querySelectorAll('#board li').length >= 2,

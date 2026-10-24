@@ -307,6 +307,17 @@
     }
 
     /* Полный сброс территории игрока в нейтраль (смерть). */
+    /* Убийца забирает всю землю жертвы (как в Paper.io 2). */
+    transferTerritory(fromId, toId) {
+      if (!fromId || !toId || fromId === toId) return 0;
+      var n = 0;
+      for (var i = 0; i < this.size; i++) {
+        if (this.owner[i] === fromId) { this.setOwnerIdx(i, toId); n++; }
+      }
+      this.clearTrail(fromId);
+      return n;
+    }
+
     releaseTerritory(id) {
       var n = 0;
       for (var i = 0; i < this.size; i++) {

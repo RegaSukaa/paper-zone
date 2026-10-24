@@ -505,35 +505,58 @@
     drawMinimap(ctx, W, H) {
       if (!this.minimapOn) return;
       var g = this.game.grid;
-      var size = W < 620 ? 74 : 104;
-      var pad = W < 620 ? 10 : 16;
+      var small = Math.min(W, H) < 620;
+      var size = Math.max(small ? 112 : 168, Math.min(small ? 168 : 248, Math.min(W, H) * (small ? 0.27 : 0.32)));
+      var pad = small ? 10 : 16;
       var x = pad;
       var y = H - size - pad;
-      var scale = (size - 8) / Math.max(g.w, g.h);
+      var scale = (size - 10) / Math.max(g.w, g.h);
       var mw = g.w * scale, mh = g.h * scale;
       var ox = x + (size - mw) / 2, oy = y + (size - mh) / 2;
+      this.minimapRect = { x: x, y: y, size: size };
 
       ctx.save();
       ctx.beginPath();
-      if (ctx.roundRect) ctx.roundRect(x, y, size, size, 12);
+      if (ctx.roundRect) ctx.roundRect(x, y, size, size, 16);
       else ctx.rect(x, y, size, size);
-      ctx.fillStyle = 'rgba(246,242,233,0.92)';
+      ctx.fillStyle = 'rgba(250,247,240,0.96)';
       ctx.fill();
-      ctx.strokeStyle = 'rgba(40,32,20,0.18)';
-      ctx.lineWidth = 1;
-      ctx.stroke();
+      ctx.save();
+      ctx.clip();
 
+      // земля игроков — цветными пятнами
+      ctx.imageSmoothingEnabled = true;
       ctx.drawImage(this.terr, ox, oy, mw, mh);
 
+      // рамка видимой области
+      var vz = this.cam.zoom;
+      var vw = (W / vz) * scale, vh = (H / vz) * scale;
+      var vx = ox + (this.cam.x - W / (2 * vz)) * scale;
+      var vy = oy + (this.cam.y - H / (2 * vz)) * scale;
+      ctx.strokeStyle = 'rgba(29,38,56,0.30)';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(vx, vy, vw, vh);
+
+      // головы
       for (var i = 0; i < this.game.players.length; i++) {
         var p = this.game.players[i];
         if (!p.alive) continue;
         var px = ox + p.x * scale, py = oy + p.y * scale;
         ctx.beginPath();
-        ctx.arc(px, py, i === 0 ? 2.8 : 1.9, 0, TAU);
+        ctx.arc(px, py, i === 0 ? 3.6 : 2.4, 0, TAU);
         ctx.fillStyle = i === 0 ? '#1d2638' : p.palette.land;
         ctx.fill();
+        if (i === 0) {
+          ctx.strokeStyle = '#fff';
+          ctx.lineWidth = 1.6;
+          ctx.stroke();
+        }
       }
+      ctx.restore();
+
+      ctx.strokeStyle = 'rgba(40,32,20,0.20)';
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
       ctx.restore();
     }
   }
