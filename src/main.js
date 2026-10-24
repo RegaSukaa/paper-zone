@@ -7,7 +7,7 @@
   var PIO = window.PIO;
   var $ = function (id) { return document.getElementById(id); };
   var STEP = PIO.FIXED_STEP;
-  var SIZE_MAP = { small: 90, medium: 140, large: 200 };
+  var SIZE_MAP = { small: 120, medium: 160, large: 220 };
 
   var canvas = $('field');
   var renderer = new PIO.Renderer(canvas);
@@ -15,12 +15,12 @@
   var settings = save.settings;
 
   var config = {
-    mode: save.lastMode,
-    difficulty: save.lastDifficulty,
-    skin: save.skin,
+    mode: save.lastMode || 'classic',
+    difficulty: save.lastDifficulty || 'medium',
+    skinId: save.skinId || 'mint',
     botCount: save.botCount,
-    mapSize: save.mapSize,
-    speed: save.speed
+    mapSize: save.mapSize || 'medium',
+    speed: save.speed || 13.5
   };
 
   var screen = 'menu';
@@ -45,17 +45,15 @@
     renderer.opts.shakeEnabled = settings.shake;
   }
 
-  function persist() {
-    PIO.Storage.save(save);
-  }
+  function persist() { PIO.Storage.save(save); }
 
   /* -------------------------------- матч -------------------------------- */
 
   function startMatch() {
     var mapSize = config.mode === 'free'
-      ? (SIZE_MAP[config.mapSize] || 140)
-      : (config.mode === 'quick' ? 130 : 150);
-    var speed = config.mode === 'free' ? config.speed : 11;
+      ? (SIZE_MAP[config.mapSize] || 160)
+      : (config.mode === 'quick' ? 150 : 160);
+    var speed = config.mode === 'free' ? config.speed : 13.5;
     var seed = (Date.now() ^ ((Math.random() * 0xffffffff) >>> 0)) >>> 0;
 
     game = new PIO.Game({
@@ -65,11 +63,11 @@
       mapH: mapSize,
       botCount: config.botCount,
       speed: speed,
-      playerSkin: config.skin,
-      seed: seed
+      goalPercent: 30,
+      seed: seed,
+      playerSkin: config.skinId
     });
-    // скорость игрока не зависит от уровня сложности ботов
-    if (game.human) game.human.speed = speed;
+    if (game.human) game.human.speed = speed; // сложность ускоряет только ботов
 
     renderer.setGame(game);
     renderer.opts.shakeEnabled = settings.shake;
@@ -83,7 +81,6 @@
     PIO.UI.show('game');
     PIO.UI.updateHUD(game);
     PIO.Sound.play('start');
-    if (input) input.resetDirCache();
   }
 
   function finishMatch() {
@@ -125,13 +122,13 @@
     attract = new PIO.Game({
       mode: 'classic',
       difficulty: 'medium',
-      mapW: 110,
-      mapH: 110,
-      botCount: 4,
-      speed: 11,
-      playerSkin: config.skin,
+      mapW: 150,
+      mapH: 150,
+      botCount: 5,
+      speed: 13.5,
       seed: (Math.random() * 0xffffffff) >>> 0,
-      autopilot: true
+      autopilot: true,
+      playerSkin: config.skinId
     });
     renderer.setGame(attract);
     renderer.minimapOn = settings.minimap;
@@ -195,26 +192,17 @@
         PIO.Sound.init();
         PIO.Sound.play('click');
         break;
-      case 'play':
-        startMatch();
-        break;
+      case 'play': startMatch(); break;
       case 'mode':
-        config.mode = payload;
-        save.lastMode = payload;
-        persist();
-        PIO.UI.syncMenu(config);
+        config.mode = payload; save.lastMode = payload; persist(); PIO.UI.syncMenu(config);
         break;
       case 'difficulty':
-        config.difficulty = payload;
-        save.lastDifficulty = payload;
-        persist();
-        PIO.UI.syncMenu(config);
+        config.difficulty = payload; save.lastDifficulty = payload; persist(); PIO.UI.syncMenu(config);
         break;
       case 'skin':
-        config.skin = payload;
-        save.skin = payload;
-        persist();
-        PIO.UI.syncMenu(config);
+        config.skinId = payload; save.skinId = payload; persist();
+        PIO.UI.setSkin(payload);
+        if (attract) attract.cfg.playerSkin = payload;
         break;
       case 'free':
         config.botCount = payload.botCount;
@@ -234,35 +222,16 @@
         applySettings();
         persist();
         break;
-      case 'settingsOpen':
-        goto('settings');
-        break;
-      case 'settingsBack':
-        settingsBack();
-        break;
-      case 'nav':
-        goto(payload);
-        break;
-      case 'reset':
-        handleReset();
-        break;
-      case 'pause':
-        if (screen === 'game' || screen === 'pause') togglePause();
-        break;
-      case 'resume':
-        if (screen === 'pause') togglePause();
-        break;
-      case 'restart':
-        startMatch();
-        break;
-      case 'menu':
-        toMenu();
-        break;
-      case 'again':
-        startMatch();
-        break;
-      default:
-        break;
+      case 'settingsOpen': goto('settings'); break;
+      case 'settingsBack': settingsBack(); break;
+      case 'nav': goto(payload); break;
+      case 'reset': handleReset(); break;
+      case 'pause': if (screen === 'game' || screen === 'pause') togglePause(); break;
+      case 'resume': if (screen === 'pause') togglePause(); break;
+      case 'restart': startMatch(); break;
+      case 'menu': toMenu(); break;
+      case 'again': startMatch(); break;
+      default: break;
     }
   }
 
@@ -280,17 +249,19 @@
       if (ev.type === 'capture') {
         renderer.addCaptureEffect(ev);
         if (!silent && ev.id === 1) {
-          PIO.Sound.play(ev.count > 320 ? 'bigCapture' : 'capture');
+          PIO.Sound.play(ev.count > 500 ? 'bigCapture' : 'capture');
         }
       } else if (ev.type === 'death') {
         var dead = findPlayer(g, ev.id);
-        renderer.addDeathEffect(ev.x, ev.y, dead ? dead.colors.head : '#ffffff');
+        var color = dead ? dead.palette.head : '#ffffff';
+        renderer.addDeathEffect(ev.x, ev.y, color);
         if (!silent) {
           if (ev.id === 1) PIO.Sound.play('death');
           else if (ev.killer === 1) PIO.Sound.play('kill');
         }
       } else if (ev.type === 'spawn') {
-        if (!silent && ev.isBot && g !== attract) PIO.Sound.play('spawn');
+        if (ev.respawn) renderer.registerPlayer(findPlayer(g, ev.id));
+        if (!silent && ev.isBot && ev.respawn) PIO.Sound.play('spawn');
       }
     }
   }
@@ -329,11 +300,12 @@
         at++;
       }
       handleGameEvents(attract, true);
-      if (attract.state === 'over' || attract.time > 60) startAttract();
+      if (attract.state === 'over' || attract.time > 70) startAttract();
     }
 
     renderer.update(dt);
     renderer.draw(dt);
+    PIO.UI.animate(now);
   }
 
   function rafLoop(now) {
@@ -351,18 +323,16 @@
   /* ------------------------------- ввод --------------------------------- */
 
   input = PIO.Input.attach(canvas, {
-    stick: $('stick'),
-    onDir: function (dir) {
-      if (screen === 'game' && game) game.steerHuman(dir);
+    knob: document.querySelector('#drag-ring .drag__knob'),
+    onAngle: function (angle) {
+      if (screen === 'game' && game) game.steer(angle);
     },
     onPause: function () {
       if (screen === 'game' || screen === 'pause') togglePause();
     },
     getHeadScreen: function () {
-      if (!game) return null;
-      var p = game.human;
-      if (!p) return null;
-      return renderer.worldToScreen(p.x, p.y);
+      if (!game || !game.human || !game.human.alive) return null;
+      return renderer.worldToScreen(game.human.x, game.human.y);
     }
   });
 
@@ -375,13 +345,8 @@
   });
 
   window.addEventListener('keydown', function (e) {
-    if (e.code === 'KeyR' && screen === 'result') {
-      if (e.ctrlKey || e.metaKey) return;
-      startMatch();
-    }
-    if ((e.code === 'Escape' || e.code === 'KeyP') && screen === 'pause') {
-      // уже обработано во вводе
-    }
+    if (e.ctrlKey || e.metaKey) return;
+    if (e.code === 'KeyR' && screen === 'result') startMatch();
   });
 
   window.addEventListener('pointerdown', function () { PIO.Sound.init(); }, { once: true });
@@ -398,7 +363,7 @@
   startAttract();
   requestAnimationFrame(rafLoop);
 
-  /* доступ к игре для отладочных проверок в браузере */
+  /* отладочные хуки для браузерных проверок */
   window.__PZ = {
     get game() { return game; },
     get attract() { return attract; },
@@ -407,12 +372,8 @@
     get save() { return save; },
     debug: function () {
       return {
-        screen: screen,
-        settingsReturn: settingsReturn,
-        hasGame: !!game,
-        gameState: game ? game.state : null,
-        paused: screen === 'pause',
-        log: uiLog.slice(-12)
+        screen: screen, settingsReturn: settingsReturn, hasGame: !!game,
+        gameState: game ? game.state : null, log: uiLog.slice(-12)
       };
     },
     startMatch: startMatch,

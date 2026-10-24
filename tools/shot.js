@@ -1,38 +1,42 @@
-/* tools/shot.js — снимки экрана через Chrome DevTools Protocol.
- * Обычный `--screenshot` срабатывает слишком рано (страница ещё на меню),
- * поэтому здесь мы подключаемся к headless-браузеру, сами запускаем матч,
- * ждём реальные секунды и снимаем кадр по CDP.
+/* tools/shot.js — снимки экрана для документации и отчёта.
  *   node tools/shot.js
+ * Два прогона headless Edge: меню и живой матч (скрипт на странице сразу
+ * запускает игру и ведёт указатель по кругу).
  */
 'use strict';
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const { spawn } = require('child_process');
+const { execFileSync } = require('child_process');
 
 const root = path.resolve(__dirname, '..');
 const outDir = path.join(root, 'docs');
 const BROWSER = process.env.PZ_BROWSER || 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe';
-const PORT = 9333 + (process.pid % 200);
 
 const playScript = `
 <script>
-window.addEventListener('load', function () {
-  setTimeout(function () {
+(function () {
+  function start() {
+    var PZ = window.__PZ;
+    if (!PZ) { return; }
     document.getElementById('btn-play').click();
-    function key(code) { window.dispatchEvent(new KeyboardEvent('keydown', { code: code, key: code })); }
-    setTimeout(function () {
-      key('ArrowRight');
-      setTimeout(function () { key('ArrowDown'); }, 700);
-      setTimeout(function () { key('ArrowLeft'); }, 1400);
-      setTimeout(function () { key('ArrowUp'); }, 2100);
-      setTimeout(function () { key('ArrowRight'); }, 2700);
-    }, 300);
-  }, 400);
-});
+    var t0 = performance.now();
+    setInterval(function () {
+      var PZ2 = window.__PZ;
+      if (!PZ2 || !PZ2.game || !PZ2.game.human) return;
+      var h = PZ2.game.human;
+      var head = PZ2.renderer.worldToScreen(h.x, h.y);
+      var a = (performance.now() - t0) / 1000 * 1.15;
+      var px = head.x + Math.cos(a) * 190;
+      var py = head.y + Math.sin(a) * 190;
+      window.dispatchEvent(new PointerEvent('pointermove', {
+        pointerType: 'mouse', clientX: px, clientY: py, bubbles: true
+      }));
+    }, 70);
+  }
+  document.addEventListener('DOMContentLoaded', function () { start(); });
+})();
 </script>`;
-
-function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
 function build(name, inject) {
   const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
@@ -41,94 +45,40 @@ function build(name, inject) {
   return out;
 }
 
-async function getTarget(url) {
-  for (let i = 0; i < 60; i++) {
-    try {
-      const res = await fetch('http://127.0.0.1:' + PORT + '/json/list');
-      const list = await res.json();
-      const page = list.find(t => t.type === 'page' && t.webSocketDebuggerUrl);
-      if (page) return page;
-    } catch (e) { /* браузер ещё поднимается */ }
-    await sleep(200);
-  }
-  throw new Error('не дождались CDP-таргета');
-}
-
-async function capture(pageUrl, file, width, height, waitMs, evaluate) {
+function shot(pageFile, file, size, budget) {
+  const target = path.join(outDir, file);
+  try { fs.unlinkSync(target); } catch (e) {}
   const profile = path.join(os.tmpdir(), 'pz-shot-' + Date.now() + '-' + Math.floor(Math.random() * 1e6));
-  const child = spawn(BROWSER, [
-    '--headless=new', '--disable-gpu', '--no-first-run', '--no-default-browser-check',
-    '--allow-file-access-from-files', '--hide-scrollbars', '--mute-audio',
-    '--window-size=' + width + ',' + height,
-    '--user-data-dir=' + profile,
-    '--remote-debugging-port=' + PORT,
-    pageUrl
-  ], { stdio: 'ignore' });
-
-  let ws = null;
   try {
-    const target = await getTarget();
-    ws = new WebSocket(target.webSocketDebuggerUrl);
-    await new Promise((res, rej) => {
-      ws.addEventListener('open', res, { once: true });
-      ws.addEventListener('error', rej, { once: true });
-    });
-    let id = 0;
-    const pending = new Map();
-    ws.addEventListener('message', ev => {
-      const msg = JSON.parse(ev.data);
-      if (msg.id && pending.has(msg.id)) {
-        const { resolve, reject } = pending.get(msg.id);
-        pending.delete(msg.id);
-        if (msg.error) reject(new Error(msg.error.message));
-        else resolve(msg.result);
-      }
-    });
-    function send(method, params) {
-      return new Promise((resolve, reject) => {
-        const mid = ++id;
-        pending.set(mid, { resolve, reject });
-        ws.send(JSON.stringify({ id: mid, method, params: params || {} }));
-      });
-    }
-
-    await send('Page.enable');
-    await send('Runtime.enable');
-    await send('Page.navigate', { url: pageUrl });
-    await sleep(waitMs);
-    if (evaluate) {
-      const info = await send('Runtime.evaluate', { expression: evaluate, returnByValue: true });
-      console.log('  состояние: ' + JSON.stringify(info.result && info.result.value));
-    }
-    const shot = await send('Page.captureScreenshot', { format: 'png', fromSurface: true });
-    const target2 = path.join(outDir, file);
-    fs.writeFileSync(target2, Buffer.from(shot.data, 'base64'));
-    console.log(file + ': ' + Math.round(fs.statSync(target2).size / 1024) + ' КБ');
+    execFileSync(BROWSER, [
+      '--headless=new', '--disable-gpu', '--no-first-run', '--no-default-browser-check',
+      '--allow-file-access-from-files', '--hide-scrollbars', '--mute-audio',
+      '--window-size=' + size,
+      '--user-data-dir=' + profile,
+      '--virtual-time-budget=' + budget,
+      '--screenshot=' + target,
+      'file:///' + pageFile.replace(/\\/g, '/')
+    ], { stdio: 'ignore', timeout: 180000 });
+  } catch (e) {
+    console.log('снимок не удался: ' + file + ' — ' + e.message);
   } finally {
-    try { if (ws) ws.close(); } catch (e) {}
-    try { child.kill(); } catch (e) {}
-    await sleep(300);
     try { fs.rmSync(profile, { recursive: true, force: true }); } catch (e) {}
   }
+  if (fs.existsSync(target)) {
+    console.log(file + ': ' + Math.round(fs.statSync(target).size / 1024) + ' КБ');
+  } else {
+    console.log(file + ': файла нет');
+  }
 }
 
-(async () => {
-  fs.mkdirSync(outDir, { recursive: true });
-  const menuPage = build('_shot_menu.html');
-  const gamePage = build('_shot_game.html', playScript);
-  const stateExpr = 'JSON.stringify({screen: window.__PZ.screen, percent: +window.__PZ.game.grid.percent(1).toFixed(2), time: +window.__PZ.game.time.toFixed(1)})';
+fs.mkdirSync(outDir, { recursive: true });
+const menuPage = build('_shot_menu.html');
+const gamePage = build('_shot_game.html', playScript);
 
-  console.log('меню 1280×800');
-  await capture('file:///' + menuPage.replace(/\\/g, '/'), 'screen-menu.png', 1280, 800, 1200);
-  console.log('игра 1280×800');
-  await capture('file:///' + gamePage.replace(/\\/g, '/'), 'screen-game.png', 1280, 800, 5200, stateExpr);
-  console.log('мобильный 420×900');
-  await capture('file:///' + menuPage.replace(/\\/g, '/'), 'screen-mobile.png', 420, 900, 1200);
+shot(menuPage, 'screen-menu.png', '1280,800', 5000);
+shot(gamePage, 'screen-game.png', '1000,650', 4000);
+shot(menuPage, 'screen-mobile.png', '420,900', 5000);
 
-  for (const f of [menuPage, gamePage]) {
-    try { fs.unlinkSync(f); } catch (e) {}
-  }
-})().catch(e => {
-  console.error('ошибка снимков: ' + e.message);
-  process.exit(1);
-});
+for (const f of [menuPage, gamePage]) {
+  try { fs.unlinkSync(f); } catch (e) {}
+}

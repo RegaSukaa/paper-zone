@@ -23,19 +23,40 @@
     { x: 0, y: -1, name: 'up' }
   ];
 
-  var SKINS = [
-    { name: 'Мята',    land: '#17b98a', edge: '#5cf3c6', trail: '#3ceec0', head: '#c6ffef' },
-    { name: 'Индиго',  land: '#3a74f0', edge: '#8db2ff', trail: '#5f9bff', head: '#d6e4ff' },
-    { name: 'Аметист', land: '#9553ef', edge: '#c9a3ff', trail: '#b487ff', head: '#e9d9ff' },
-    { name: 'Манго',   land: '#e8841a', edge: '#ffc176', trail: '#ffa63c', head: '#ffe3bc' },
-    { name: 'Фуксия',  land: '#e3439a', edge: '#ff9dcc', trail: '#ff69b4', head: '#ffd7ea' },
-    { name: 'Лайм',    land: '#b9c318', edge: '#e9f35f', trail: '#ddeb3a', head: '#f8ffb4' },
-    { name: 'Коралл',  land: '#e04338', edge: '#ff9a92', trail: '#ff6f63', head: '#ffd2cd' },
-    { name: 'Аква',    land: '#0f9fbf', edge: '#66dcf0', trail: '#28c6e8', head: '#c3f3ff' }
-  ];
+  /* Палитры персонажей переехали в src/skins.js. */
 
   function bitOf(id) { return 1 << (id - 1); }
   function clamp(v, a, b) { return v < a ? a : (v > b ? b : v); }
+
+  /* Физика движения: непрерывные координаты в клетках мира. */
+  var PHYS = {
+    speed: 13.5,        // клеток в секунду
+    turnRate: 8.2,      // рад/с — ограничение угловой скорости
+    headRadius: 1.05,   // радиус головы (визуал + столкновения)
+    trailRadius: 1.15,  // радиус штампа: головa не может задеть незаштампованную клетку
+    substep: 0.34,      // максимум клеток за один подшаг
+    grace: 16,          // сколько последних штампов не считаются «своим следом»
+    deadzone: 1.6       // радиус вокруг головы, внутри которого курсор не меняет курс
+  };
+
+  var TAU = Math.PI * 2;
+
+  function angNorm(a) {
+    a = a % TAU;
+    if (a < -Math.PI) a += TAU;
+    if (a > Math.PI) a -= TAU;
+    return a;
+  }
+  function angleTo(x0, y0, x1, y1) { return Math.atan2(y1 - y0, x1 - x0); }
+  function turnToward(cur, want, maxStep) {
+    var d = angNorm(want - cur);
+    if (Math.abs(d) <= maxStep) return want;
+    return cur + Math.sign(d) * maxStep;
+  }
+  function dist2(x0, y0, x1, y1) {
+    var dx = x1 - x0, dy = y1 - y0;
+    return dx * dx + dy * dy;
+  }
 
   /* Детерминированный ГПСЧ — матчи воспроизводимы по seed. */
   function mulberry32(seed) {
@@ -218,6 +239,73 @@
       return { enclosed: enclosed, trail: trailIdx, capturedCount: enclosed.length + trailIdx.length };
     }
 
+    /* Штамп круглого следа: клетки, чьи центры попали в радиус. Возвращает
+     * количество новых клеток и заполняет out (массив индексов). */
+    stampDisc(cx, cy, r, id, out) {
+      var x0 = Math.floor(cx - r), x1 = Math.ceil(cx + r);
+      var y0 = Math.floor(cy - r), y1 = Math.ceil(cy + r);
+      var added = 0;
+      out.length = 0;
+      for (var y = y0; y <= y1; y++) {
+        for (var x = x0; x <= x1; x++) {
+          if (!this.inBounds(x, y)) continue;
+          var dx = x + 0.5 - cx, dy = y + 0.5 - cy;
+          if (dx * dx + dy * dy > r * r) continue;
+          var i = y * this.w + x;
+          out.push(i);
+          if (this.addTrailIdx(i, id)) added++;
+        }
+      }
+      return added;
+    }
+
+    /* Тонкий след по отрезку: клетки, через которые реально прошла голова.
+     * Шаг выборки 0.4 клетки гарантирует 4-связность без «толстых» пятен. */
+    stampLine(x0, y0, x1, y1, id, out) {
+      out.length = 0;
+      var dx = x1 - x0, dy = y1 - y0;
+      var dist = Math.sqrt(dx * dx + dy * dy);
+      var steps = Math.max(1, Math.ceil(dist / 0.4));
+      var added = 0;
+      var prevX = null, prevY = null;
+      for (var k = 0; k <= steps; k++) {
+        var t = k / steps;
+        var x = Math.floor(x0 + dx * t), y = Math.floor(y0 + dy * t);
+        if (prevX !== null && x !== prevX && y !== prevY) {
+          // диагональный переход: добавляем «угол», иначе след не 4-связный
+          var ex = prevX, ey = y;
+          if (this.inBounds(ex, ey)) {
+            var ei = ey * this.w + ex;
+            if (out.indexOf(ei) === -1) { out.push(ei); if (this.addTrailIdx(ei, id)) added++; }
+          }
+        }
+        prevX = x;
+        prevY = y;
+        if (!this.inBounds(x, y)) continue;
+        var i = y * this.w + x;
+        if (out.indexOf(i) !== -1) continue;
+        out.push(i);
+        if (this.addTrailIdx(i, id)) added++;
+      }
+      return added;
+    }
+
+    /* Клетки круга без изменения состояния — для проверок столкновений. */
+    discCells(cx, cy, r, out) {
+      var x0 = Math.floor(cx - r), x1 = Math.ceil(cx + r);
+      var y0 = Math.floor(cy - r), y1 = Math.ceil(cy + r);
+      out.length = 0;
+      for (var y = y0; y <= y1; y++) {
+        for (var x = x0; x <= x1; x++) {
+          if (!this.inBounds(x, y)) continue;
+          var dx = x + 0.5 - cx, dy = y + 0.5 - cy;
+          if (dx * dx + dy * dy > r * r) continue;
+          out.push(y * this.w + x);
+        }
+      }
+      return out;
+    }
+
     /* Полный сброс территории игрока в нейтраль (смерть). */
     releaseTerritory(id) {
       var n = 0;
@@ -232,7 +320,12 @@
   return {
     MAX_PLAYERS: MAX_PLAYERS,
     DIRS: DIRS,
-    SKINS: SKINS,
+    PHYS: PHYS,
+    TAU: TAU,
+    angNorm: angNorm,
+    angleTo: angleTo,
+    turnToward: turnToward,
+    dist2: dist2,
     Grid: Grid,
     bitOf: bitOf,
     clamp: clamp,

@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
-<meta name="theme-color" content="#070a14">
-<meta name="description" content="Paper Zone — браузерная игра о захвате территории: тяни след, замыкай контур, не подставляй хвост.">
+<meta name="theme-color" content="#f6f2e9">
+<meta name="description" content="Paper Zone — браузерная игра о захвате территории: веди персонажа за курсором, замыкай петлю, не подставляй хвост.">
 <title>Paper Zone — захват территории</title>
 <link rel="stylesheet" href="style.css">
 </head>
@@ -12,153 +12,160 @@
 <div id="app">
   <canvas id="field"></canvas>
 
+  <!-- ============================ HUD ============================ -->
   <div class="hud is-hidden" id="hud">
-    <div class="hud__panel hud__panel--left">
-      <span class="hud__label">Территория</span>
-      <strong class="hud__value" id="hud-percent">0.0%</strong>
-      <span class="hud__sub" id="hud-cells">0 клеток</span>
+    <div class="hud__bar"><i id="hud-progress"></i></div>
+    <div class="hud__row">
+      <div class="chip chip--land">
+        <span class="chip__label">Территория</span>
+        <strong class="chip__value" id="hud-percent">0.0%</strong>
+        <span class="chip__sub" id="hud-cells">0 клеток</span>
+      </div>
+      <div class="chip chip--mode">
+        <span class="chip__label" id="hud-mode">Классика</span>
+        <strong class="chip__value chip__value--time" id="hud-time">0:00</strong>
+        <span class="chip__sub" id="hud-bots">5 соперников</span>
+      </div>
+      <div class="chip chip--score">
+        <span class="chip__label">Счёт</span>
+        <strong class="chip__value" id="hud-score">0</strong>
+        <span class="chip__sub" id="hud-leader">лидер 0.0%</span>
+      </div>
+      <button class="icon-btn" id="btn-pause" aria-label="Пауза" title="Пауза (Esc)">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="5" width="3.4" height="14" rx="1.2"/><rect x="13.6" y="5" width="3.4" height="14" rx="1.2"/></svg>
+      </button>
     </div>
-    <div class="hud__panel hud__panel--center">
-      <span class="hud__label" id="hud-mode">Классика</span>
-      <strong class="hud__value hud__value--time" id="hud-time">0:00</strong>
-      <span class="hud__sub" id="hud-bots">5 соперников</span>
-    </div>
-    <div class="hud__panel hud__panel--right">
-      <span class="hud__label">Счёт</span>
-      <strong class="hud__value" id="hud-score">0</strong>
-      <span class="hud__sub" id="hud-leader">лидер 0.0%</span>
-    </div>
-    <button class="btn-icon" id="btn-pause" aria-label="Пауза" title="Пауза (Esc)">
-      <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="5" width="3.4" height="14" rx="1.2"/><rect x="13.6" y="5" width="3.4" height="14" rx="1.2"/></svg>
-    </button>
+    <ol class="board" id="board"></ol>
   </div>
 
-  <div class="stick is-hidden" id="stick" aria-hidden="true"><i class="stick__knob"></i></div>
+  <div class="drag is-hidden" id="drag-ring"><i class="drag__knob"></i></div>
 
-  <!-- ======================= ГЛАВНОЕ МЕНЮ ======================= -->
+  <!-- ============================ МЕНЮ ============================ -->
   <section class="screen screen--menu" id="screen-menu">
     <div class="menu">
-      <header class="brand">
-        <span class="brand__badge">территория · след · риск</span>
-        <h1 class="brand__title">PAPER<span>ZONE</span></h1>
-        <p class="brand__tag">Захватывай землю, пока не обрезали хвост</p>
-      </header>
+      <div class="menu__left">
+        <header class="brand">
+          <span class="brand__chip">360° · след · риск</span>
+          <h1 class="brand__title">PAPER<br><span>ZONE</span></h1>
+          <p class="brand__tag">Захватывай землю, пока не обрезали хвост</p>
+        </header>
 
-      <div class="card">
-        <div class="card__title">Режим</div>
-        <div class="modes" id="mode-list"></div>
-      </div>
+        <div class="panel">
+          <div class="panel__head">Режим</div>
+          <div class="modes" id="mode-list"></div>
+        </div>
 
-      <div class="card card--split">
-        <div class="field">
-          <div class="card__title">Сложность</div>
-          <div class="segmented" id="difficulty-list">
-            <button type="button" data-difficulty="easy">Лёгкий</button>
-            <button type="button" data-difficulty="medium">Средний</button>
-            <button type="button" data-difficulty="hard">Сложный</button>
+        <div class="panel panel--split">
+          <div class="field">
+            <div class="panel__head">Сложность</div>
+            <div class="segment" id="difficulty-list">
+              <button type="button" data-difficulty="easy">Лёгкий</button>
+              <button type="button" data-difficulty="medium">Средний</button>
+              <button type="button" data-difficulty="hard">Сложный</button>
+            </div>
+            <p class="hint" id="difficulty-hint">Боты расширяются и атакуют хвосты.</p>
           </div>
-          <p class="field__hint" id="difficulty-hint">Боты расширяются, замечают след и атакуют.</p>
+          <div class="field">
+            <div class="panel__head">Свободная игра</div>
+            <div class="mini" id="free-options">
+              <label class="mini__row">Боты <b id="opt-bots-value">5</b>
+                <input type="range" id="opt-bots" min="0" max="7" step="1" value="5">
+              </label>
+              <label class="mini__row">Скорость <b id="opt-speed-value">13.5</b>
+                <input type="range" id="opt-speed" min="9" max="18" step="0.5" value="13.5">
+              </label>
+              <label class="mini__row">Карта
+                <select id="opt-size">
+                  <option value="small">120×120</option>
+                  <option value="medium" selected>160×160</option>
+                  <option value="large">220×220</option>
+                </select>
+              </label>
+            </div>
+          </div>
         </div>
-        <div class="field">
-          <div class="card__title">Скин</div>
-          <div class="skins" id="skin-list"></div>
-          <p class="field__hint" id="skin-name">Мята</p>
+
+        <div class="actions">
+          <button type="button" class="btn btn--play" id="btn-play"><span>Играть</span></button>
+          <div class="actions__row">
+            <button type="button" class="btn btn--ghost" data-screen="help">Как играть</button>
+            <button type="button" class="btn btn--ghost" data-screen="stats">Рекорды</button>
+            <button type="button" class="btn btn--ghost" data-screen="settings">Настройки</button>
+          </div>
         </div>
       </div>
 
-      <div class="card is-hidden" id="free-options">
-        <div class="card__title">Настройки свободной игры</div>
-        <div class="opt">
-          <label for="opt-bots">Соперники <b id="opt-bots-value">5</b></label>
-          <input type="range" id="opt-bots" min="0" max="7" step="1" value="5">
+      <aside class="menu__right">
+        <div class="stage">
+          <canvas id="skin-stage" width="360" height="360" aria-label="Предпросмотр персонажа"></canvas>
+          <div class="stage__meta">
+            <strong id="skin-name">Мята</strong>
+            <span id="skin-tag">слизь</span>
+          </div>
         </div>
-        <div class="opt">
-          <label for="opt-size">Размер карты</label>
-          <select id="opt-size">
-            <option value="small">Малая · 90×90</option>
-            <option value="medium" selected>Средняя · 140×140</option>
-            <option value="large">Большая · 200×200</option>
-          </select>
-        </div>
-        <div class="opt">
-          <label for="opt-speed">Скорость <b id="opt-speed-value">11</b></label>
-          <input type="range" id="opt-speed" min="7" max="16" step="1" value="11">
-        </div>
-      </div>
-
-      <div class="actions">
-        <button type="button" class="btn btn--primary btn--play" id="btn-play">Играть</button>
-        <div class="actions__row">
-          <button type="button" class="btn" data-screen="help">Как играть</button>
-          <button type="button" class="btn" data-screen="stats">Рекорды</button>
-          <button type="button" class="btn" data-screen="settings">Настройки</button>
-        </div>
-      </div>
-      <p class="hint">WASD / стрелки / мышь / свайп — движение · Esc — пауза</p>
+        <div class="skins" id="skin-list" role="listbox" aria-label="Выбор персонажа"></div>
+        <p class="hint hint--center">Веди персонажа курсором — он поворачивает плавно.</p>
+      </aside>
     </div>
   </section>
 
-  <!-- ======================= КАК ИГРАТЬ ======================= -->
+  <!-- ============================ КАК ИГРАТЬ ============================ -->
   <section class="screen is-hidden" id="screen-help">
     <div class="menu menu--narrow">
       <div class="screen__head">
         <h2>Как играть</h2>
         <button type="button" class="btn btn--ghost" data-screen="menu">Назад</button>
       </div>
-      <div class="card rule">
-        <h3>1. Выйди из своей земли</h3>
-        <p>Пока ты на своей территории — тебя нельзя убить. За её пределами за тобой тянется след.</p>
-      </div>
-      <div class="card rule">
-        <h3>2. Замкни контур</h3>
-        <p>Вернись на свою землю — всё, что оказалось внутри замкнутой петли, станет твоим. Форма петли может быть любой.</p>
-      </div>
-      <div class="card rule">
-        <h3>3. Береги хвост</h3>
-        <p>Свой след — смерть. Чужой след — оружие: пересеки его, и соперник погибнет вместе со своей землёй.</p>
-      </div>
-      <div class="card rule">
-        <h3>4. Побеждай</h3>
-        <p id="help-win">Классика: 60% карты или все соперники. Выживание: продержись 150 секунд. Быстрый матч: больше территории за 90 секунд.</p>
-      </div>
-      <div class="card rule">
+      <div class="panel rule">
         <h3>Управление</h3>
-        <p>Клавиатура: WASD или стрелки, Esc — пауза, R — заново после матча. Мышь: веди курсором. Телефон: проведи пальцем в нужную сторону.</p>
+        <p>Персонаж едет за курсором и плавно поворачивает. Веди мышь вокруг него, чтобы закладывать петли. На телефоне — веди пальцем в любую сторону: точка касания не важна.</p>
+      </div>
+      <div class="panel rule">
+        <h3>Захват</h3>
+        <p>Вышел со своей земли — за тобой тянется след. Вернулся — всё, что отрезано следом, становится твоим. Форма петли любая.</p>
+      </div>
+      <div class="panel rule">
+        <h3>Смерть</h3>
+        <p>Свой след — смерть. Чужой след — оружие: пересеки его, и владелец погибнет. Край карты смертелен, а на своей земле тебя не тронуть.</p>
+      </div>
+      <div class="panel rule">
+        <h3>Победа</h3>
+        <p>Классика: 30% карты. Выживание: продержаться 150 секунд. Быстрый матч: больше территории за 90 секунд. Погибшие боты возвращаются — арена не пустеет.</p>
+      </div>
+      <div class="panel rule">
+        <h3>Клавиши</h3>
+        <p>WASD или стрелки — альтернативное управление (включая диагонали), Esc — пауза, R — заново после матча.</p>
       </div>
     </div>
   </section>
 
-  <!-- ======================= РЕКОРДЫ ======================= -->
+  <!-- ============================ РЕКОРДЫ ============================ -->
   <section class="screen is-hidden" id="screen-stats">
     <div class="menu menu--narrow">
       <div class="screen__head">
-        <h2>Рекорды и статистика</h2>
+        <h2>Рекорды</h2>
         <button type="button" class="btn btn--ghost" data-screen="menu">Назад</button>
       </div>
-      <div class="card">
+      <div class="panel">
         <div class="stats" id="stats-grid"></div>
-        <p class="field__hint">Всё хранится локально в этом браузере. Это не онлайн-рейтинг.</p>
+        <p class="hint">Всё хранится локально в этом браузере. Это не онлайн-рейтинг.</p>
       </div>
     </div>
   </section>
 
-  <!-- ======================= НАСТРОЙКИ ======================= -->
+  <!-- ============================ НАСТРОЙКИ ============================ -->
   <section class="screen is-hidden" id="screen-settings">
     <div class="menu menu--narrow">
       <div class="screen__head">
         <h2>Настройки</h2>
         <button type="button" class="btn btn--ghost" id="btn-settings-back">Назад</button>
       </div>
-      <div class="card">
+      <div class="panel">
         <label class="switch">
           <input type="checkbox" id="set-sound" checked>
           <span class="switch__box"></span>
           <span class="switch__text">Звук</span>
         </label>
-        <div class="opt">
-          <label for="set-volume">Громкость <b id="set-volume-value">60%</b></label>
-          <input type="range" id="set-volume" min="0" max="100" step="5" value="60">
-        </div>
         <label class="switch">
           <input type="checkbox" id="set-minimap" checked>
           <span class="switch__box"></span>
@@ -169,38 +176,41 @@
           <span class="switch__box"></span>
           <span class="switch__text">Тряска экрана</span>
         </label>
+        <div class="mini__row mini__row--wide">Громкость <b id="set-volume-value">60%</b>
+          <input type="range" id="set-volume" min="0" max="100" step="5" value="60">
+        </div>
       </div>
-      <div class="card">
-        <div class="card__title">Прогресс</div>
-        <p class="field__hint">Рекорды, статистика и настройки хранятся в localStorage. Сброс необратим.</p>
+      <div class="panel">
+        <div class="panel__head">Прогресс</div>
+        <p class="hint">Рекорды, статистика и настройки лежат в localStorage. Сброс необратим.</p>
         <button type="button" class="btn btn--danger" id="btn-reset">Сбросить прогресс</button>
       </div>
     </div>
   </section>
 
-  <!-- ======================= ПАУЗА ======================= -->
+  <!-- ============================ ПАУЗА ============================ -->
   <section class="screen screen--overlay is-hidden" id="screen-pause">
     <div class="dialog">
       <h2>Пауза</h2>
       <p class="dialog__sub" id="pause-info">Классика · Средний</p>
       <div class="dialog__actions">
-        <button type="button" class="btn btn--primary" id="btn-resume">Продолжить</button>
+        <button type="button" class="btn btn--play" id="btn-resume"><span>Продолжить</span></button>
         <button type="button" class="btn" id="btn-restart-pause">Начать заново</button>
-        <button type="button" class="btn" id="btn-settings-pause">Настройки</button>
+        <button type="button" class="btn btn--ghost" id="btn-settings-pause">Настройки</button>
         <button type="button" class="btn btn--ghost" id="btn-menu-pause">В меню</button>
       </div>
     </div>
   </section>
 
-  <!-- ======================= РЕЗУЛЬТАТ ======================= -->
+  <!-- ============================ РЕЗУЛЬТАТ ============================ -->
   <section class="screen screen--overlay is-hidden" id="screen-result">
     <div class="dialog dialog--result">
-      <div class="result__badge" id="result-badge">Победа</div>
+      <div class="badge" id="result-badge">Победа</div>
       <h2 id="result-title">Территория захвачена</h2>
       <p class="dialog__sub" id="result-reason">Захвачено 62% карты</p>
       <div class="result__grid" id="result-grid"></div>
-      <div class="dialog__actions">
-        <button type="button" class="btn btn--primary" id="btn-again">Играть снова</button>
+      <div class="dialog__actions dialog__actions--row">
+        <button type="button" class="btn btn--play" id="btn-again"><span>Играть снова</span></button>
         <button type="button" class="btn btn--ghost" id="btn-menu-result">В меню</button>
       </div>
     </div>
@@ -210,6 +220,8 @@
 </div>
 
 <script src="src/core.js"></script>
+<script src="src/skins.js"></script>
+<script src="src/player.js"></script>
 <script src="src/ai.js"></script>
 <script src="src/engine.js"></script>
 <script src="src/storage.js"></script>

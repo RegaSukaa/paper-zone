@@ -22,12 +22,12 @@
       bestScore: 0,
       bestPercent: 0,
       bestSurvival: 0,
-      skin: 0,
+      skinId: 'mint',
       lastMode: 'classic',
       lastDifficulty: 'medium',
       botCount: 5,
       mapSize: 'medium',
-      speed: 11,
+      speed: 13.5,
       settings: { sound: true, volume: 0.6, minimap: true, shake: true }
     };
   }
@@ -50,11 +50,11 @@
     d.bestScore = Math.floor(num(raw.bestScore, 0, 0, 1e12));
     d.bestPercent = num(raw.bestPercent, 0, 0, 100);
     d.bestSurvival = num(raw.bestSurvival, 0, 0, 1e6);
-    d.skin = Math.floor(num(raw.skin, 0, 0, 7));
+    d.skinId = (typeof raw.skinId === 'string' && /^[a-z]{3,12}$/.test(raw.skinId)) ? raw.skinId : 'mint';
     d.lastMode = pick(raw.lastMode, MODES, 'classic');
     d.lastDifficulty = pick(raw.lastDifficulty, LEVELS, 'medium');
     d.botCount = Math.floor(num(raw.botCount, 5, 0, 7));
-    d.speed = Math.floor(num(raw.speed, 11, 7, 16));
+    d.speed = num(raw.speed, 13.5, 9, 18);
     if (raw.mapSize === 'small' || raw.mapSize === 'large') d.mapSize = raw.mapSize;
     var s = raw.settings || {};
     d.settings = {

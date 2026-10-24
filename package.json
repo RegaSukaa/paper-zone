@@ -4,7 +4,7 @@
   "private": true,
   "description": "Paper Zone — браузерная игра о захвате территории (Paper.io 2 style), чистый HTML/CSS/JS.",
   "scripts": {
-    "test": "node --test tests/territory.test.js tests/collision.test.js tests/game.test.js",
+    "test": "node --test tests/physics.test.js tests/game.test.js tests/territory.test.js",
     "dev": "node tools/dev-server.js",
     "check": "node tools/headless-check.js",
     "shots": "node tools/shot.js"

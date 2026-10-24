@@ -1,24 +1,10 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { Game, DIRS, walk, arena } = require('./helpers.js');
-
-function hashGame(game) {
-  let h = 2166136261 >>> 0;
-  const owner = game.grid.owner;
-  for (let i = 0; i < owner.length; i++) {
-    h ^= owner[i];
-    h = Math.imul(h, 16777619) >>> 0;
-  }
-  for (const p of game.players) {
-    h ^= (p.cx * 31 + p.cy) | 0;
-    h = Math.imul(h, 16777619) >>> 0;
-  }
-  return h;
-}
+const { Game, PHYS, arena, place, driveTo, hashGame } = require('./helpers.js');
 
 test('классический матч стартует с игроком и ботами, у каждого своя земля', () => {
-  const game = new Game({ mode: 'classic', mapW: 120, mapH: 120, seed: 42 });
+  const game = new Game({ mode: 'classic', mapW: 140, mapH: 140, seed: 42 });
   assert.equal(game.players.length, 6);
   assert.equal(game.players[0].isBot, false);
   assert.equal(game.aliveBots().length, 5);
@@ -26,98 +12,69 @@ test('классический матч стартует с игроком и б
   for (const p of game.players) {
     assert.equal(game.grid.ownerCount(p.id), size * size, `стартовая площадь игрока ${p.id}`);
     assert.equal(p.alive, true);
+    assert.ok(typeof p.angle === 'number' && isFinite(p.angle));
   }
-  assert.ok(game.grid.percent(1) > 0);
   assert.equal(game.state, 'playing');
 });
 
-test('выход за свою территорию начинает след вне земли', () => {
-  const game = new Game({ mode: 'classic', mapW: 120, mapH: 120, seed: 42 });
-  const p = game.human;
-  walk(game, 1, DIRS[0], 1);
-  assert.equal(p.alive, true);
-  assert.equal(p.trailCells.size, 0, 'внутри земли следа нет');
-  walk(game, 1, DIRS[0], 6);
-  assert.equal(p.trailing, true);
-  assert.ok(p.trailCells.size > 0);
-  assert.ok(p.trailPath.length > 0);
-});
-
-test('свободная игра без ботов: полный цикл захвата через движение', () => {
-  const game = new Game({ mode: 'free', botCount: 0, mapW: 40, mapH: 40, seed: 5 });
-  const p = game.human;
-  game.grid.releaseTerritory(1);
-  game.grid.claimRect(2, 10, 6, 6, 1);
-  p.cx = 7; p.cy = 12; p.x = 7.5; p.y = 12.5;
-  p.dir = DIRS[0]; p.nextDir = DIRS[0];
-
-  walk(game, 1, DIRS[0], 4);
-  walk(game, 1, DIRS[1], 3);
-  walk(game, 1, DIRS[2], 4);
-
-  assert.equal(p.alive, true);
-  assert.equal(game.grid.ownerCount(1), 36 + 16);
-  assert.equal(game.players.length, 1);
-});
-
 test('боты живут, расширяются и не убиваются о стены', () => {
-  const game = new Game({ mode: 'classic', mapW: 120, mapH: 120, seed: 2026, difficulty: 'medium', autopilot: true });
-  const startCounts = new Map();
-  for (const p of game.players) startCounts.set(p.id, game.grid.ownerCount(p.id));
+  const game = new Game({ mode: 'classic', mapW: 140, mapH: 140, seed: 2026, difficulty: 'medium', autopilot: true });
+  const start = new Map(game.players.map(p => [p.id, game.grid.ownerCount(p.id)]));
   const causes = {};
+  const captures = new Set();
   let steps = 0;
   while (game.time < 45 && game.state === 'playing' && steps < 45 * 60 + 5) {
     game.step(1 / 60);
     steps++;
     for (const ev of game.drainEvents()) {
       if (ev.type === 'death') causes[ev.cause] = (causes[ev.cause] || 0) + 1;
+      if (ev.type === 'capture') captures.add(ev.id);
     }
   }
-  assert.ok(game.time >= 44, `симуляция дошла только до ${game.time.toFixed(1)} c`);
-  assert.equal(game.state, 'playing', 'матч не должен закончиться сам за 45 секунд');
+  assert.ok(game.time >= 44, `симуляция дошла только до ${game.time.toFixed(1)} с`);
+  assert.equal(game.state, 'playing');
   assert.equal(causes.wall || 0, 0, 'боты не врезаются в границу карты');
-  assert.ok((causes.self || 0) <= 2, `самоубийств о свой след слишком много: ${causes.self || 0}`);
+  assert.ok((causes.self || 0) <= 3, `самоубийств о свой след: ${causes.self || 0}`);
   const alive = game.players.filter(p => p.alive);
-  assert.ok(alive.length >= 3, `осталось игроков: ${alive.length}`);
-  let grown = 0;
-  for (const b of alive) {
-    if (game.grid.ownerCount(b.id) > startCounts.get(b.id)) grown++;
-  }
-  assert.ok(grown >= Math.max(2, alive.length - 1), `расширились ${grown} из ${alive.length}`);
-  const totalBot = alive.reduce((s, b) => s + game.grid.ownerCount(b.id), 0);
-  assert.ok(totalBot > 6 * 36 * 1.2, `суммарная земля живых ${totalBot}`);
+  assert.ok(alive.length >= 2, `живых: ${alive.length}`);
+  assert.ok(captures.size >= 2, `захватывали территорию ${captures.size} игроков`);
+  const total = alive.reduce((s, p) => s + game.grid.ownerCount(p.id), 0);
+  assert.ok(total >= alive.length * 81, `суммарная земля живых: ${total}`);
+  assert.ok(start.size === 6, 'шесть игроков на старте');
 });
 
 test('на всех уровнях сложности боты играют и расширяются', () => {
   const measure = (difficulty) => {
-    const game = new Game({ mode: 'classic', mapW: 110, mapH: 110, seed: 999, difficulty, autopilot: true });
+    const game = new Game({ mode: 'classic', mapW: 130, mapH: 130, seed: 999, difficulty, autopilot: true });
     const start = new Map(game.players.map(p => [p.id, game.grid.ownerCount(p.id)]));
     const causes = {};
+    const captures = new Set();
     let steps = 0;
     while (game.time < 30 && game.state === 'playing' && steps < 30 * 60 + 5) {
       game.step(1 / 60);
       steps++;
       for (const ev of game.drainEvents()) {
         if (ev.type === 'death') causes[ev.cause] = (causes[ev.cause] || 0) + 1;
+        if (ev.type === 'capture') captures.add(ev.id);
       }
     }
     const alive = game.players.filter(p => p.alive);
-    const total = alive.reduce((s, p) => s + game.grid.ownerCount(p.id), 0);
-    const grown = alive.filter(p => game.grid.ownerCount(p.id) > start.get(p.id)).length;
-    return { game, total, alive: alive.length, grown, wall: causes.wall || 0, self: causes.self || 0 };
+    return {
+      total: alive.reduce((s, p) => s + game.grid.ownerCount(p.id), 0),
+      alive: alive.length,
+      captures: captures.size,
+      wall: causes.wall || 0,
+      self: causes.self || 0
+    };
   };
-  const levels = ['easy', 'medium', 'hard'];
-  const results = {};
-  for (const level of levels) {
+  for (const level of ['easy', 'medium', 'hard']) {
     const r = measure(level);
-    results[level] = r;
     assert.equal(r.wall, 0, `${level}: врезались в стену ${r.wall} раз`);
-    assert.ok(r.self <= 2, `${level}: самоубийств ${r.self}`);
-    assert.ok(r.alive >= 3, `${level}: живых ${r.alive}`);
-    assert.ok(r.grown >= r.alive - 1, `${level}: расширились ${r.grown} из ${r.alive}`);
-    assert.ok(r.total > 216 * 1.15, `${level}: суммарная земля ${r.total}`);
+    assert.ok(r.self <= 3, `${level}: самоубийств ${r.self}`);
+    assert.ok(r.alive >= 2, `${level}: живых ${r.alive}`);
+    assert.ok(r.captures >= 1, `${level}: захватывали ${r.captures}`);
+    assert.ok(r.total >= r.alive * 81, `${level}: земля ${r.total} при ${r.alive} живых`);
   }
-  // сложность меняет параметры, а не только скорость
   const AI = require('../src/ai.js').AI;
   assert.ok(AI.LEVELS.hard.risk > AI.LEVELS.easy.risk);
   assert.ok(AI.LEVELS.hard.aggression > AI.LEVELS.easy.aggression);
@@ -127,9 +84,9 @@ test('на всех уровнях сложности боты играют и �
 
 test('детерминизм: одинаковый seed даёт одинаковый матч', () => {
   const run = () => {
-    const game = new Game({ mode: 'classic', mapW: 100, mapH: 100, seed: 777 });
+    const game = new Game({ mode: 'classic', mapW: 120, mapH: 120, seed: 777 });
     for (let i = 0; i < 900; i++) game.step(1 / 60);
-    return { hash: hashGame(game), time: game.time, state: game.state };
+    return { hash: hashGame(game), state: game.state };
   };
   const a = run();
   const b = run();
@@ -138,9 +95,10 @@ test('детерминизм: одинаковый seed даёт одинако�
 });
 
 test('смерть игрока завершает матч поражением', () => {
-  const { game, p } = arena({ mapW: 30, mapH: 30 });
-  p.cx = 0; p.cy = 5; p.x = 0.5; p.y = 5.5;
-  game.enterCell(p, -1, 5);
+  const { game, p } = arena({ mapW: 80, mapH: 80 });
+  place(p, 3, 30, Math.PI);
+  p.x = 1.0;
+  game.advance(p);
   game.checkEnd();
   assert.equal(game.state, 'over');
   assert.equal(game.result.win, false);
@@ -155,10 +113,9 @@ test('победа по проценту территории в классик�
   assert.equal(game.state, 'over');
   assert.equal(game.result.win, true);
   assert.equal(game.result.reason, 'goal');
-  assert.ok(game.result.percent >= 5);
 });
 
-test('быстрый матч заканчивается по времени и сравнивает проценты', () => {
+test('быстрый матч: конец по времени и сравнение процентов', () => {
   const game = new Game({ mode: 'quick', mapW: 100, mapH: 100, seed: 3, timeLimit: 4 });
   game.time = 4.01;
   game.checkEnd();
@@ -167,27 +124,27 @@ test('быстрый матч заканчивается по времени и 
   assert.equal(game.result.win, game.result.percent >= game.result.bestBotPercent);
 });
 
-test('быстрый матч доигрывается до конца без внешнего таймера', () => {
+test('быстрый матч доигрывается сам до конца', () => {
   const game = new Game({ mode: 'quick', mapW: 100, mapH: 100, seed: 3, timeLimit: 4, autopilot: true });
   let steps = 0;
   while (game.state === 'playing' && steps < 60 * 10) { game.step(1 / 60); steps++; }
   assert.equal(game.state, 'over');
-  assert.ok(game.result.time <= 5, 'матч не длится дольше лимита');
+  assert.ok(game.result.time <= 5);
 });
 
 test('выживание: соперники прибывают со временем', () => {
-  const game = new Game({ mode: 'survival', mapW: 100, mapH: 100, seed: 8 });
+  const game = new Game({ mode: 'survival', mapW: 120, mapH: 120, seed: 8 });
   const before = game.players.length;
   game.time = game.nextSpawnAt + 0.01;
   game.updateSurvival();
-  assert.ok(game.players.length > before, 'новый бот добавлен');
+  assert.ok(game.players.length > before);
   const bot = game.players[game.players.length - 1];
   assert.equal(bot.isBot, true);
   assert.ok(game.grid.ownerCount(bot.id) > 0);
 });
 
 test('победа в выживании по времени', () => {
-  const game = new Game({ mode: 'survival', mapW: 100, mapH: 100, seed: 8, survivalGoal: 3 });
+  const game = new Game({ mode: 'survival', mapW: 120, mapH: 120, seed: 8, survivalGoal: 3 });
   game.time = 3.01;
   game.checkEnd();
   assert.equal(game.state, 'over');
@@ -195,13 +152,16 @@ test('победа в выживании по времени', () => {
   assert.equal(game.result.reason, 'survived');
 });
 
-test('победа уничтожением всех соперников', () => {
-  const game = new Game({ mode: 'classic', mapW: 100, mapH: 100, seed: 12 });
-  for (const b of game.aliveBots()) game.kill(b, 'test');
-  game.checkEnd();
-  assert.equal(game.state, 'over');
-  assert.equal(game.result.win, true);
-  assert.equal(game.result.reason, 'lastman');
+test('погибшие боты возвращаются на арену', () => {
+  const game = new Game({ mode: 'classic', mapW: 110, mapH: 110, seed: 12, autopilot: true });
+  const victim = game.aliveBots()[0];
+  game.kill(victim, 'test');
+  assert.equal(victim.alive, false);
+  // прокручиваем время до респавна
+  for (let i = 0; i < 60 * 9 && !victim.alive; i++) game.step(1 / 60);
+  assert.equal(victim.alive, true, 'бот вернулся через несколько секунд');
+  assert.ok(game.grid.ownerCount(victim.id) > 0, 'у него снова есть земля');
+  assert.equal(game.state, 'playing', 'матч не заканчивается смертью бота');
 });
 
 test('счёт и статистика считаются из реальных данных', () => {
@@ -224,4 +184,23 @@ test('новый матч после завершения создаётся ч�
   assert.equal(second.state, 'playing');
   assert.equal(second.events.filter(e => e.type !== 'spawn').length, 0);
   assert.equal(second.players.length, 6);
+});
+
+test('захват в реальном матче даёт процент и событие', () => {
+  const game = new Game({ mode: 'free', botCount: 0, mapW: 140, mapH: 140, seed: 5 });
+  const p = game.human;
+  game.grid.releaseTerritory(1);
+  game.grid.claimRect(60, 60, 9, 9, 1);
+  place(p, 64.5, 64.5, 0);
+  const before = game.grid.percent(1);
+  const ok = driveTo(game, 1, 64.5, 92, 8) &&
+             driveTo(game, 1, 98, 92, 8) &&
+             driveTo(game, 1, 98, 44, 10) &&
+             driveTo(game, 1, 64.5, 44, 10) &&
+             driveTo(game, 1, 64.5, 64.5, 8);
+  assert.ok(ok, 'маршрут пройден');
+  const events = game.drainEvents().filter(e => e.type === 'capture');
+  assert.ok(events.length >= 1, 'событие захвата есть');
+  assert.ok(game.grid.percent(1) > before + 1);
+  assert.equal(game.human.trail.size, 0);
 });

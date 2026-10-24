@@ -1,65 +1,122 @@
 /* ============================================================================
- * input.js — клавиатура, мышь и сенсорное управление.
- * Направление меняется только на одно из четырёх: движение по сетке.
+ * input.js — аналоговое управление: 360°.
+ *
+ * Мышь: персонаж едет в сторону курсора (как в Paper.io 2). Телефон: палец
+ * задаёт направление свайпа, точка захвата не важна — можно вести где угодно.
+ * Клавиатура оставлена как альтернатива (WASD/стрелки, включая диагонали).
  * ==========================================================================*/
 (function (root) {
   'use strict';
 
-  var DIRS = root.PIO.DIRS;
-
-  function dirOf(dx, dy) {
-    if (Math.abs(dx) >= Math.abs(dy)) return dx >= 0 ? DIRS[0] : DIRS[2];
-    return dy >= 0 ? DIRS[1] : DIRS[3];
-  }
-
-  var KEYMAP = {
-    KeyW: DIRS[3], ArrowUp: DIRS[3],
-    KeyS: DIRS[1], ArrowDown: DIRS[1],
-    KeyA: DIRS[2], ArrowLeft: DIRS[2],
-    KeyD: DIRS[0], ArrowRight: DIRS[0]
-  };
-
   var Input = {
     attach: function (canvas, opts) {
       opts = opts || {};
-      var stick = opts.stick || null;
-      var knob = stick ? stick.querySelector('.stick__knob') : null;
       var st = {
-        active: false,
-        pointerId: null,
-        ox: 0, oy: 0,
-        lastDir: null,
-        mode: null,
         enabled: true,
-        mouseFrom: null
+        angle: null,
+        keys: {},
+        pointer: { active: false, id: null, ax: 0, ay: 0, x: 0, y: 0 },
+        knob: opts.knob || null
       };
 
-      function emit(dir) {
-        if (!dir || !st.enabled) return;
-        if (st.lastDir === dir) return;
-        st.lastDir = dir;
-        if (opts.onDir) opts.onDir(dir);
+      var HEAD_DEAD_ZONE = 26;   // px: в центре головы направление не меняем
+      var DRAG_DEAD_ZONE = 12;   // px: мёртвая зона свайпа
+      var REANCHOR = 90;         // px: перецепляем «виртуальный стик»
+
+      function emit(angle) {
+        if (!st.enabled || angle === null || !isFinite(angle)) return;
+        st.angle = angle;
+        if (opts.onAngle) opts.onAngle(angle);
       }
 
-      function showStick(x, y) {
-        if (!stick) return;
-        stick.classList.remove('is-hidden');
-        stick.style.left = x + 'px';
-        stick.style.top = y + 'px';
-        if (knob) knob.style.transform = 'translate(0px, 0px)';
-      }
-      function hideStick() {
-        if (stick) stick.classList.add('is-hidden');
+      function angleToHead(clientX, clientY) {
+        var head = opts.getHeadScreen ? opts.getHeadScreen() : null;
+        if (!head) return null;
+        var dx = clientX - head.x;
+        var dy = clientY - head.y;
+        if (Math.hypot(dx, dy) < HEAD_DEAD_ZONE) return null;
+        return Math.atan2(dy, dx);
       }
 
-      function onKey(e) {
+      function onPointerMove(e) {
+        if (!st.enabled) return;
+        if (e.pointerType === 'mouse') {
+          var a = angleToHead(e.clientX, e.clientY);
+          if (a !== null) emit(a);
+          return;
+        }
+        if (!st.pointer.active || e.pointerId !== st.pointer.id) return;
+        var dx = e.clientX - st.pointer.ax;
+        var dy = e.clientY - st.pointer.ay;
+        var dist = Math.hypot(dx, dy);
+        if (dist > REANCHOR) {
+          // перецентровка, чтобы палец не «упирался» в край экрана
+          st.pointer.ax = e.clientX - (dx / dist) * REANCHOR * 0.5;
+          st.pointer.ay = e.clientY - (dy / dist) * REANCHOR * 0.5;
+          dx = e.clientX - st.pointer.ax;
+          dy = e.clientY - st.pointer.ay;
+        }
+        if (dist < DRAG_DEAD_ZONE) return;
+        emit(Math.atan2(dy, dx));
+        if (st.knob) {
+          var r = 26;
+          var l = Math.hypot(dx, dy) || 1;
+          var kx = (dx / l) * Math.min(r, l);
+          var ky = (dy / l) * Math.min(r, l);
+          st.knob.style.transform = 'translate(' + kx.toFixed(1) + 'px,' + ky.toFixed(1) + 'px)';
+        }
+      }
+
+      function onPointerDown(e) {
+        if (!st.enabled) return;
+        if (e.pointerType === 'mouse') return;
+        st.pointer.active = true;
+        st.pointer.id = e.pointerId;
+        st.pointer.ax = e.clientX;
+        st.pointer.ay = e.clientY;
+        if (st.knob && st.knob.parentNode) {
+          st.knob.parentNode.style.left = e.clientX + 'px';
+          st.knob.parentNode.style.top = e.clientY + 'px';
+          st.knob.parentNode.classList.remove('is-hidden');
+          st.knob.style.transform = 'translate(0,0)';
+        }
+        if (canvas.setPointerCapture) {
+          try { canvas.setPointerCapture(e.pointerId); } catch (err) {}
+        }
+      }
+
+      function onPointerUp(e) {
+        if (e && e.pointerType === 'mouse') return;
+        if (!st.pointer.active) return;
+        if (e && e.pointerId !== undefined && e.pointerId !== st.pointer.id) return;
+        st.pointer.active = false;
+        st.pointer.id = null;
+        if (st.knob && st.knob.parentNode) st.knob.parentNode.classList.add('is-hidden');
+      }
+
+      var KEY_ANGLE = {};
+      KEY_ANGLE.KeyW = -Math.PI / 2; KEY_ANGLE.ArrowUp = -Math.PI / 2;
+      KEY_ANGLE.KeyS = Math.PI / 2; KEY_ANGLE.ArrowDown = Math.PI / 2;
+      KEY_ANGLE.KeyA = Math.PI; KEY_ANGLE.ArrowLeft = Math.PI;
+      KEY_ANGLE.KeyD = 0; KEY_ANGLE.ArrowRight = 0;
+
+      function keysAngle() {
+        var x = 0, y = 0;
+        if (st.keys.KeyW || st.keys.ArrowUp) y -= 1;
+        if (st.keys.KeyS || st.keys.ArrowDown) y += 1;
+        if (st.keys.KeyA || st.keys.ArrowLeft) x -= 1;
+        if (st.keys.KeyD || st.keys.ArrowRight) x += 1;
+        if (!x && !y) return null;
+        return Math.atan2(y, x);
+      }
+
+      function onKeyDown(e) {
         if (e.ctrlKey || e.metaKey || e.altKey) return;
-        var dir = KEYMAP[e.code];
-        if (dir) {
+        if (KEY_ANGLE[e.code] !== undefined) {
           e.preventDefault();
-          if (e.repeat) return;
-          st.mode = 'key';
-          emit(dir);
+          st.keys[e.code] = true;
+          var a = keysAngle();
+          if (a !== null) emit(a);
           return;
         }
         if (e.code === 'Escape' || e.code === 'KeyP') {
@@ -68,93 +125,46 @@
         }
       }
 
-      function steerMouse(e) {
-        if (!opts.getHeadScreen) return;
-        var head = opts.getHeadScreen();
-        var cx = head ? head.x : canvas.clientWidth / 2;
-        var cy = head ? head.y : canvas.clientHeight / 2;
-        var dx = e.clientX - cx;
-        var dy = e.clientY - cy;
-        if (Math.abs(dx) < 26 && Math.abs(dy) < 26) return;
-        emit(dirOf(dx, dy));
-      }
-
-      function onDown(e) {
-        if (!st.enabled) return;
-        if (e.pointerType === 'mouse') {
-          st.mode = 'mouse';
-          steerMouse(e);
-          return;
+      function onKeyUp(e) {
+        if (st.keys[e.code]) {
+          st.keys[e.code] = false;
+          var a = keysAngle();
+          if (a !== null) emit(a);
         }
-        st.active = true;
-        st.pointerId = e.pointerId;
-        st.ox = e.clientX;
-        st.oy = e.clientY;
-        st.mode = 'touch';
-        showStick(e.clientX, e.clientY);
-        if (canvas.setPointerCapture) {
-          try { canvas.setPointerCapture(e.pointerId); } catch (err) {}
-        }
-      }
-
-      function onMove(e) {
-        if (!st.enabled) return;
-        if (e.pointerType === 'mouse') {
-          if (st.mode === 'key' && st.mouseFrom &&
-              Math.abs(e.clientX - st.mouseFrom.x) < 24 &&
-              Math.abs(e.clientY - st.mouseFrom.y) < 24) return;
-          st.mode = 'mouse';
-          st.mouseFrom = { x: e.clientX, y: e.clientY };
-          steerMouse(e);
-          return;
-        }
-        if (!st.active || e.pointerId !== st.pointerId) return;
-        var dx = e.clientX - st.ox;
-        var dy = e.clientY - st.oy;
-        var max = 34;
-        var len = Math.hypot(dx, dy);
-        if (knob) {
-          var kx = len > max ? (dx / len) * max : dx;
-          var ky = len > max ? (dy / len) * max : dy;
-          knob.style.transform = 'translate(' + kx.toFixed(1) + 'px,' + ky.toFixed(1) + 'px)';
-        }
-        if (len < 13) return;
-        emit(dirOf(dx, dy));
-      }
-
-      function onUp(e) {
-        if (e && e.pointerType === 'mouse') return;
-        if (!st.active) return;
-        if (e && e.pointerId !== undefined && e.pointerId !== st.pointerId) return;
-        st.active = false;
-        st.pointerId = null;
-        hideStick();
       }
 
       function onContext(e) { e.preventDefault(); }
+      function onLeave() { /* курсор ушёл — курс сохраняем */ }
 
-      window.addEventListener('keydown', onKey);
-      canvas.addEventListener('pointerdown', onDown);
-      window.addEventListener('pointermove', onMove);
-      window.addEventListener('pointerup', onUp);
-      window.addEventListener('pointercancel', onUp);
+      canvas.addEventListener('pointerdown', onPointerDown);
+      window.addEventListener('pointermove', onPointerMove);
+      window.addEventListener('pointerup', onPointerUp);
+      window.addEventListener('pointercancel', onPointerUp);
+      canvas.addEventListener('pointerleave', onLeave);
       canvas.addEventListener('contextmenu', onContext);
+      window.addEventListener('keydown', onKeyDown);
+      window.addEventListener('keyup', onKeyUp);
 
       return {
         detach: function () {
-          window.removeEventListener('keydown', onKey);
-          canvas.removeEventListener('pointerdown', onDown);
-          window.removeEventListener('pointermove', onMove);
-          window.removeEventListener('pointerup', onUp);
-          window.removeEventListener('pointercancel', onUp);
+          canvas.removeEventListener('pointerdown', onPointerDown);
+          window.removeEventListener('pointermove', onPointerMove);
+          window.removeEventListener('pointerup', onPointerUp);
+          window.removeEventListener('pointercancel', onPointerUp);
+          canvas.removeEventListener('pointerleave', onLeave);
           canvas.removeEventListener('contextmenu', onContext);
+          window.removeEventListener('keydown', onKeyDown);
+          window.removeEventListener('keyup', onKeyUp);
         },
         setEnabled: function (on) {
           st.enabled = !!on;
-          if (!on) { st.active = false; hideStick(); }
-          if (!on) st.lastDir = null;
+          if (!on) {
+            st.pointer.active = false;
+            st.keys = {};
+            if (st.knob && st.knob.parentNode) st.knob.parentNode.classList.add('is-hidden');
+          }
         },
-        resetDirCache: function () { st.lastDir = null; }
+        currentAngle: function () { return st.angle; }
       };
     }
   };

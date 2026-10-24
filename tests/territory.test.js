@@ -1,7 +1,22 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { Grid, cellsOf, drawTrail } = require('./helpers.js');
+const { Grid } = require('../src/core.js');
+
+/* Рисуем «след» прямо в сетке: тесты проверяют алгоритм заливки, а не физику. */
+function drawTrail(grid, id, points) {
+  for (let k = 1; k < points.length; k++) {
+    const [x0, y0] = points[k - 1];
+    const [x1, y1] = points[k];
+    const dx = Math.sign(x1 - x0), dy = Math.sign(y1 - y0);
+    let x = x0, y = y0;
+    grid.addTrailAt(x, y, id);
+    while (x !== x1 || y !== y1) {
+      x += dx; y += dy;
+      grid.addTrailAt(x, y, id);
+    }
+  }
+}
 
 function ownedBy(grid, id) {
   const out = [];
