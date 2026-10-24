@@ -63,11 +63,16 @@
       mapH: mapSize,
       botCount: config.botCount,
       speed: speed,
-      goalPercent: 30,
+      goalPercent: 25,
       seed: seed,
-      playerSkin: config.skinId
+      playerSkin: config.skinId,
+      autopilot: /[?&]demo=1/.test(location.search)
     });
     if (game.human) game.human.speed = speed; // сложность ускоряет только ботов
+
+    /* первые кадры матча: курс берём с указателя, чтобы персонаж не уезжал
+     * в стену, пока игрок не двинул мышью */
+    if (input) input.applyLastPointer();
 
     renderer.setGame(game);
     renderer.opts.shakeEnabled = settings.shake;
@@ -128,7 +133,8 @@
       speed: 13.5,
       seed: (Math.random() * 0xffffffff) >>> 0,
       autopilot: true,
-      playerSkin: config.skinId
+      playerSkin: config.skinId,
+      autopilot: /[?&]demo=1/.test(location.search)
     });
     renderer.setGame(attract);
     renderer.minimapOn = settings.minimap;
@@ -363,7 +369,7 @@
   startAttract();
   requestAnimationFrame(rafLoop);
 
-  /* ?play=1 — сразу в бой: удобно для демо и скриншотов на хостинге */
+  /* ?play=1 — сразу в бой (демо/скриншоты), ?demo=1 — играет автопилот */
   if (/[?&]play=1/.test(location.search)) setTimeout(startMatch, 60);
 
   /* отладочные хуки для браузерных проверок */

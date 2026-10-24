@@ -138,11 +138,11 @@
         var isHuman = i === 0;
         var skin = isHuman ? this.cfg.playerSkin : this.pickSkin(used);
         if (!isHuman) used.push(skin);
-        var outward = Math.atan2(py - cy, px - cx);
+        var inward = Math.atan2(cy - py, cx - px);
         this.addPlayer({
           id: i + 1, isBot: !isHuman || !!this.cfg.autopilot,
           name: isHuman ? 'Ты' : this.nextName(),
-          x: px + 0.5, y: py + 0.5, angle: outward, skinId: skin, startSize: size
+          x: px + 0.5, y: py + 0.5, angle: inward, skinId: skin, startSize: size
         });
       }
     }

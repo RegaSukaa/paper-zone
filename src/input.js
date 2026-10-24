@@ -41,6 +41,7 @@
       function onPointerMove(e) {
         if (!st.enabled) return;
         if (e.pointerType === 'mouse') {
+          st.mouse = { x: e.clientX, y: e.clientY, seen: true };
           var a = angleToHead(e.clientX, e.clientY);
           if (a !== null) emit(a);
           return;
