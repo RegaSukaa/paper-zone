@@ -118,6 +118,22 @@
       this.ownerRev++;
     }
 
+    /* Круглая арена: всё за пределами радиуса — стена. Площадь и проценты
+     * автоматически считаются от площади круга (freeCells). */
+    makeCircle(radius) {
+      var cx = this.w / 2, cy = this.h / 2;
+      var r = radius || (Math.min(this.w, this.h) / 2 - 1.5);
+      var r2 = r * r;
+      for (var y = 0; y < this.h; y++) {
+        for (var x = 0; x < this.w; x++) {
+          var dx = x + 0.5 - cx, dy = y + 0.5 - cy;
+          this.setWall(x, y, dx * dx + dy * dy > r2);
+        }
+      }
+      this.circle = { cx: cx, cy: cy, r: r };
+      return this.circle;
+    }
+
     freeCells() { return this.size - this.wallCount; }
     ownerCount(id) { return this.counts[id] || 0; }
     percent(id) {
@@ -206,6 +222,17 @@
       }
       for (x = 0; x < w; x++) { seed(x); seed((h - 1) * w + x); }
       for (y = 1; y < h - 1; y++) { seed(y * w); seed(y * w + w - 1); }
+      /* Круглая карта: свободные клетки у кромки стен — тоже «снаружи»,
+       * иначе заливка не нашла бы границу и съела всю карту. */
+      if (this.wallCount) {
+        for (i = 0; i < size; i++) {
+          if (!wall[i]) continue;
+          if (i >= w) seed(i - w);
+          if (i < size - w) seed(i + w);
+          if (i % w > 0) seed(i - 1);
+          if (i % w < w - 1) seed(i + 1);
+        }
+      }
 
       while (qh < qt) {
         i = queue[qh++];
@@ -249,6 +276,7 @@
       for (var y = y0; y <= y1; y++) {
         for (var x = x0; x <= x1; x++) {
           if (!this.inBounds(x, y)) continue;
+          if (this.wall[y * this.w + x]) continue;
           var dx = x + 0.5 - cx, dy = y + 0.5 - cy;
           if (dx * dx + dy * dy > r * r) continue;
           var i = y * this.w + x;
@@ -298,6 +326,7 @@
       for (var y = y0; y <= y1; y++) {
         for (var x = x0; x <= x1; x++) {
           if (!this.inBounds(x, y)) continue;
+          if (this.wall[y * this.w + x]) continue;
           var dx = x + 0.5 - cx, dy = y + 0.5 - cy;
           if (dx * dx + dy * dy > r * r) continue;
           out.push(y * this.w + x);

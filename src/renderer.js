@@ -12,6 +12,55 @@
   var clamp = PIO.clamp;
   var TAU = Math.PI * 2;
 
+  /* Chaikin: срезает углы замкнутого контура — «лесенка» из клеток
+   * превращается в плавную кривую. */
+  function chaikin(pts) {
+    var n = pts.length / 2;
+    var out = new Array(n * 4);
+    for (var i = 0; i < n; i++) {
+      var j = (i + 1) % n;
+      var x0 = pts[i * 2], y0 = pts[i * 2 + 1], x1 = pts[j * 2], y1 = pts[j * 2 + 1];
+      out[i * 4] = x0 * 0.75 + x1 * 0.25;
+      out[i * 4 + 1] = y0 * 0.75 + y1 * 0.25;
+      out[i * 4 + 2] = x0 * 0.25 + x1 * 0.75;
+      out[i * 4 + 3] = y0 * 0.25 + y1 * 0.75;
+    }
+    return out;
+  }
+
+  /* Релаксация: каждая точка тянется к середине соседей. Убирает «лесенку»
+   * в масштабе нескольких клеток — край становится волнистым, бумажным. */
+  function relaxLoop(pts, passes, lambda) {
+    var n = pts.length / 2;
+    if (n < 6) return pts;
+    var cur = pts;
+    for (var it = 0; it < passes; it++) {
+      var out = new Array(cur.length);
+      for (var i = 0; i < n; i++) {
+        var im = (i - 1 + n) % n, ip = (i + 1) % n;
+        var ax = (cur[im * 2] + cur[ip * 2]) * 0.5;
+        var ay = (cur[im * 2 + 1] + cur[ip * 2 + 1]) * 0.5;
+        out[i * 2] = cur[i * 2] + lambda * (ax - cur[i * 2]);
+        out[i * 2 + 1] = cur[i * 2 + 1] + lambda * (ay - cur[i * 2 + 1]);
+      }
+      cur = out;
+    }
+    return cur;
+  }
+
+  function smoothLoop(pts, iters, minStep) {
+    var p = pts;
+    for (var i = 0; i < iters; i++) p = chaikin(p);
+    if (!minStep) return p;
+    var out = [p[0], p[1]];
+    var lx = p[0], ly = p[1];
+    for (var k = 2; k < p.length; k += 2) {
+      var dx = p[k] - lx, dy = p[k + 1] - ly;
+      if (dx * dx + dy * dy >= minStep * minStep) { out.push(p[k], p[k + 1]); lx = p[k]; ly = p[k + 1]; }
+    }
+    return out;
+  }
+
   var rgbCache = {};
   function rgb(hex) {
     if (!rgbCache[hex]) rgbCache[hex] = PIO.hexToRgb(hex);
@@ -39,12 +88,17 @@
       this.dotPattern = null;
       this.quality = 1;
 
-      this.terr = document.createElement('canvas');
-      this.terrCtx = this.terr.getContext('2d');
-      this.edge = document.createElement('canvas');
-      this.edgeCtx = this.edge.getContext('2d');
-      this.shadow = document.createElement('canvas');
-      this.shadowCtx = this.shadow.getContext('2d');
+      this.paths = new Map();      // id -> Path2D (гладкие контуры земли)
+      this.patterns = {};          // skinId -> CanvasPattern
+      this.dotPat = null;          // кэш узора арены
+      this.arenaGrad = null;       // кэш градиента кромки
+      this._mmDirty = true;
+      this._mmLast = -1;
+      this.minimapRect = null;
+
+      this.mmCanvas = document.createElement('canvas');
+      this.mmCanvas.width = this.mmCanvas.height = 256;
+      this.mmCtx = this.mmCanvas.getContext('2d');
 
       this.resize();
       this.buildPattern();
@@ -52,7 +106,9 @@
 
     resize() {
       var w = window.innerWidth, h = window.innerHeight;
-      this.dpr = Math.min(window.devicePixelRatio || 1, 2);
+      // на телефоне рисуем в 1.5x вместо 3x: разницы не видно, кадры дешевле
+      var small = Math.min(w, h) < 620;
+      this.dpr = Math.min(window.devicePixelRatio || 1, small ? 1.5 : 2);
       this.canvas.width = Math.max(1, Math.round(w * this.dpr));
       this.canvas.height = Math.max(1, Math.round(h * this.dpr));
       this.canvas.style.width = w + 'px';
@@ -60,7 +116,7 @@
       this.viewW = w;
       this.viewH = h;
       // на слабых/маленьких экранах меньше частиц и свечения
-      this.quality = (w * h < 700000 || (navigator.hardwareConcurrency || 4) <= 4) ? 0.6 : 1;
+      this.quality = (small || w * h < 700000 || (navigator.hardwareConcurrency || 4) <= 4) ? 0.6 : 1;
     }
 
     buildPattern() {
@@ -86,9 +142,10 @@
         this.skinById[p.id] = PIO.skinById(p.skinId);
       }
       var g = game.grid;
-      [this.terr, this.edge, this.shadow].forEach(function (cv) {
-        cv.width = g.w; cv.height = g.h;
-      });
+      this.paths.clear();
+      this.patterns = {};
+      this.dotPat = null;
+      this.arenaGrad = null;
       var me = game.players[0];
       this.cam.x = this.camTarget.x = me ? me.x : g.w / 2;
       this.cam.y = this.camTarget.y = me ? me.y : g.h / 2;
@@ -99,74 +156,119 @@
       this.skinById[p.id] = PIO.skinById(p.skinId);
     }
 
-    /* --------------------------- растр территории ----------------------- */
+    /* ------------------------- вектор территории ------------------------ */
+    /* Границы земли — замкнутые контуры по клеткам, сглаженные Chaikin.
+     * Пересчёт только при смене владельцев (ownerRev), не в кадре. */
 
     rebuild() {
       if (!this.game) return;
       var g = this.game.grid;
-      var w = g.w, h = g.h, size = g.size;
-      var owner = g.owner, wall = g.wall;
-      var fill = this.terrCtx.createImageData(w, h);
-      var edge = this.edgeCtx.createImageData(w, h);
-      var fd = fill.data, ed = edge.data;
-      var x, y, i, o, id, skin, land, edgeC, isEdge, k, j;
+      var w = g.w, h = g.h, owner = g.owner, wall = g.wall;
+      var byId = {};
+      var x, y, i, id, arr, key;
 
       for (y = 0; y < h; y++) {
         for (x = 0; x < w; x++) {
           i = y * w + x;
-          o = i * 4;
-          if (wall[i]) {
-            fd[o] = 214; fd[o + 1] = 210; fd[o + 2] = 200; fd[o + 3] = 255;
-            continue;
-          }
           id = owner[i];
-          if (!id) continue;
-          skin = this.skinById[id] || PIO.SKINS[0];
-          land = rgb(skin.land);
-          // тематический узор поверхности: точки, полосы, волны, грани
-          var v = 0;
-          switch (skin.texture) {
-            case 'dots':    v = (x % 7 === 0 && y % 7 === 0) ? 16 : ((x + y) % 3 === 0 ? 2 : 0); break;
-            case 'stripes': v = ((x + y) % 11 < 3) ? 12 : 0; break;
-            case 'waves':   v = (Math.sin(x * 0.55) + Math.cos(y * 0.7) > 1.1) ? 12 : 0; break;
-            case 'grid':    v = (x % 8 === 0 || y % 8 === 0) ? 14 : 0; break;
-            case 'facets':  v = ((x * 3 + y * 5) % 13 < 2) ? 14 : 0; break;
-            case 'streaks': v = ((x * 2 + y) % 9 < 2) ? 13 : 0; break;
-            default:        v = ((x * 7 + y * 13) % 5) * 2;
-          }
-          fd[o] = Math.min(255, land[0] + v);
-          fd[o + 1] = Math.min(255, land[1] + v);
-          fd[o + 2] = Math.min(255, land[2] + v);
-          fd[o + 3] = 255;
-
-          isEdge = (x === 0 || y === 0 || x === w - 1 || y === h - 1);
-          if (!isEdge) {
-            for (k = 0; k < 4; k++) {
-              j = k === 0 ? i - 1 : k === 1 ? i + 1 : k === 2 ? i - w : i + w;
-              if (owner[j] !== id) { isEdge = true; break; }
-            }
-          }
-          if (isEdge) {
-            edgeC = rgb(skin.edge);
-            ed[o] = edgeC[0]; ed[o + 1] = edgeC[1]; ed[o + 2] = edgeC[2]; ed[o + 3] = 255;
-          }
+          if (!id || wall[i]) continue;
+          arr = byId[id] || (byId[id] = []);
+          if (y === 0 || owner[i - w] !== id) arr.push(x, y, x + 1, y);
+          if (x === w - 1 || owner[i + 1] !== id) arr.push(x + 1, y, x + 1, y + 1);
+          if (y === h - 1 || owner[i + w] !== id) arr.push(x + 1, y + 1, x, y + 1);
+          if (x === 0 || owner[i - 1] !== id) arr.push(x, y + 1, x, y);
         }
       }
-      this.terrCtx.putImageData(fill, 0, 0);
-      this.edgeCtx.putImageData(edge, 0, 0);
 
-      // тень-подложка: тот же силуэт, но тёмный
-      var sh = this.shadowCtx.createImageData(w, h);
-      var sd = sh.data;
-      for (i = 0; i < size; i++) {
-        if (!owner[i]) continue;
-        sd[i * 4] = 30;
-        sd[i * 4 + 1] = 26;
-        sd[i * 4 + 2] = 22;
-        sd[i * 4 + 3] = 26;
-      }
-      this.shadowCtx.putImageData(sh, 0, 0);
+      this.paths.clear();
+      for (key in byId) this.buildPath(+key, byId[key]);
       this.rev = g.ownerRev;
+      this._mmDirty = true;
+    }
+
+    /* Сцепить рёбра в замкнутые контуры и превратить их в Path2D. */
+    buildPath(id, edges) {
+      var count = edges.length / 4;
+      var starts = new Map();
+      var e, k, list;
+      for (e = 0; e < count; e++) {
+        k = edges[e * 4] + ',' + edges[e * 4 + 1];
+        list = starts.get(k);
+        if (!list) { list = []; starts.set(k, list); }
+        list.push(e);
+      }
+      var used = new Uint8Array(count);
+      var path = new Path2D();
+      var loops = 0;
+      for (var st = 0; st < count; st++) {
+        if (used[st]) continue;
+        var pts = [];
+        var cur = st;
+        var guard = count + 2;
+        while (cur !== -1 && !used[cur] && guard-- > 0) {
+          used[cur] = 1;
+          pts.push(edges[cur * 4], edges[cur * 4 + 1]);
+          var cand = starts.get(edges[cur * 4 + 2] + ',' + edges[cur * 4 + 3]);
+          var next = -1;
+          if (cand) {
+            for (var c = 0; c < cand.length; c++) {
+              if (!used[cand[c]]) { next = cand[c]; break; }
+            }
+          }
+          cur = next;
+        }
+        if (pts.length < 8) continue;
+        // релаксация до сглаживания: точки ещё через клетку, поэтому
+        // срезаются именно ступеньки в 1-2 клетки, а не микроколебания
+        var sp = relaxLoop(pts, 6, 0.5);
+        sp = smoothLoop(sp, 2, 0.5);
+        path.moveTo(sp[0], sp[1]);
+        for (var q = 2; q < sp.length; q += 2) path.lineTo(sp[q], sp[q + 1]);
+        path.closePath();
+        loops++;
+      }
+      if (loops) this.paths.set(id, path);
+    }
+
+    /* Тематический узор поверхности: плитка 32 px = 4 клетки мира. */
+    patternFor(skin) {
+      if (this.patterns[skin.id] !== undefined) return this.patterns[skin.id];
+      var cv = document.createElement('canvas');
+      cv.width = cv.height = 32;
+      var g2 = cv.getContext('2d');
+      g2.fillStyle = 'rgba(255,255,255,0.55)';
+      g2.strokeStyle = 'rgba(255,255,255,0.5)';
+      g2.lineCap = 'round';
+      switch (skin.texture) {
+        case 'dots':
+          g2.beginPath(); g2.arc(8, 8, 2.1, 0, TAU); g2.arc(24, 24, 2.1, 0, TAU); g2.fill(); break;
+        case 'stripes':
+          g2.lineWidth = 3.4;
+          g2.beginPath(); g2.moveTo(-8, 14); g2.lineTo(14, -8); g2.moveTo(10, 40); g2.lineTo(40, 10); g2.stroke(); break;
+        case 'waves':
+          g2.lineWidth = 2.8;
+          g2.beginPath();
+          g2.moveTo(-2, 10); g2.quadraticCurveTo(8, 1, 18, 10); g2.quadraticCurveTo(26, 18, 34, 10);
+          g2.moveTo(-2, 26); g2.quadraticCurveTo(8, 17, 18, 26); g2.quadraticCurveTo(26, 34, 34, 26);
+          g2.stroke(); break;
+        case 'grid':
+          g2.lineWidth = 2;
+          g2.beginPath(); g2.moveTo(0, 16); g2.lineTo(32, 16); g2.moveTo(16, 0); g2.lineTo(16, 32); g2.stroke(); break;
+        case 'facets':
+          g2.lineWidth = 2.2;
+          g2.beginPath(); g2.moveTo(16, 3); g2.lineTo(29, 16); g2.lineTo(16, 29); g2.lineTo(3, 16); g2.closePath(); g2.stroke(); break;
+        case 'streaks':
+          g2.lineWidth = 2.4;
+          g2.beginPath(); g2.moveTo(2, 7); g2.lineTo(15, 7); g2.moveTo(17, 25); g2.lineTo(30, 25); g2.stroke(); break;
+        default:
+          g2.beginPath(); g2.arc(10, 10, 1.6, 0, TAU); g2.fill();
+      }
+      var pat = this.ctx.createPattern(cv, 'repeat');
+      if (pat && pat.setTransform && typeof DOMMatrix !== 'undefined') {
+        try { pat.setTransform(new DOMMatrix().scaleSelf(4 / 32)); } catch (err) { /* старый браузер */ }
+      }
+      this.patterns[skin.id] = pat;
+      return pat;
     }
 
     /* ------------------------------- эффекты ---------------------------- */
@@ -219,6 +321,15 @@
       }
       var visible = Math.min(this.viewW, this.viewH) < 620 ? 21 : 30;
       var targetZoom = Math.min(this.viewW, this.viewH) / visible;
+      if (this.overview && g.grid.circle) {
+        // режим обзора: вся арена в кадре (демо и отладка)
+        this.cam.x = g.grid.circle.cx;
+        this.cam.y = g.grid.circle.cy;
+        this.camTarget.x = this.cam.x;
+        this.camTarget.y = this.cam.y;
+        this.cam.zoom = Math.min(this.viewW, this.viewH) / (g.grid.circle.r * 2.1);
+        return;
+      }
       this.cam.zoom += (targetZoom - this.cam.zoom) * Math.min(1, dt * 3.5);
 
       var hw = this.viewW / (2 * this.cam.zoom);
@@ -267,6 +378,176 @@
         pt.vy *= 0.93;
       }
       if (this.shake > 0) this.shake = Math.max(0, this.shake - dt * 2.4);
+    }
+
+    /* Пастельный фон с мягкими пятнами: градиенты считаются один раз. */
+    buildBackground(W, H) {
+      var cv = document.createElement('canvas');
+      cv.width = Math.max(2, Math.round(W * this.dpr));
+      cv.height = Math.max(2, Math.round(H * this.dpr));
+      var g = cv.getContext('2d');
+      g.scale(this.dpr, this.dpr);
+      var bg = g.createLinearGradient(0, 0, W, H);
+      bg.addColorStop(0, '#eaf3ef');
+      bg.addColorStop(0.55, '#e6eef6');
+      bg.addColorStop(1, '#f2ece1');
+      g.fillStyle = bg;
+      g.fillRect(0, 0, W, H);
+      var blobs = [
+        { x: 0.18, y: 0.16, r: 0.30, c: 'rgba(120, 220, 190, 0.22)' },
+        { x: 0.82, y: 0.22, r: 0.26, c: 'rgba(130, 180, 255, 0.20)' },
+        { x: 0.68, y: 0.86, r: 0.34, c: 'rgba(255, 200, 130, 0.20)' },
+        { x: 0.10, y: 0.78, r: 0.24, c: 'rgba(255, 160, 190, 0.16)' }
+      ];
+      for (var i = 0; i < blobs.length; i++) {
+        var bl = blobs[i];
+        var bx = bl.x * W, by = bl.y * H, br = bl.r * Math.max(W, H);
+        var rg = g.createRadialGradient(bx, by, 0, bx, by, br);
+        rg.addColorStop(0, bl.c);
+        rg.addColorStop(1, 'rgba(255,255,255,0)');
+        g.fillStyle = rg;
+        g.fillRect(bx - br, by - br, br * 2, br * 2);
+      }
+      this.bgCanvas = cv;
+    }
+
+    /* Спрайт мягкого свечения: вместо градиента на каждого игрока каждый кадр. */
+    buildGlow() {
+      var cv = document.createElement('canvas');
+      cv.width = cv.height = 64;
+      var g = cv.getContext('2d');
+      var rg = g.createRadialGradient(32, 32, 0, 32, 32, 32);
+      rg.addColorStop(0, 'rgba(255,255,255,0.55)');
+      rg.addColorStop(0.45, 'rgba(255,255,255,0.20)');
+      rg.addColorStop(1, 'rgba(255,255,255,0)');
+      g.fillStyle = rg;
+      g.fillRect(0, 0, 64, 64);
+      this.glow = cv;
+    }
+
+    draw(dt) {
+      var ctx = this.ctx;
+      var W = this.viewW, H = this.viewH;
+      ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
+
+      // фон вне арены: статичная картинка, готовится один раз при resize
+      if (!this.bgCanvas) this.buildBackground(W, H);
+      ctx.drawImage(this.bgCanvas, 0, 0, W, H);
+
+      var g = this.game;
+      if (!g) return;
+      var me = g.players[0];
+      var tx, ty;
+      if (me && me.alive) {
+        tx = me.x + Math.cos(me.angle) * 3.2;
+        ty = me.y + Math.sin(me.angle) * 3.2;
+      } else {
+        tx = this.camTarget.x; ty = this.camTarget.y;
+      }
+      var visible = Math.min(this.viewW, this.viewH) < 620 ? 21 : 30;
+      var targetZoom = Math.min(this.viewW, this.viewH) / visible;
+      if (this.overview && g.grid.circle) {
+        // режим обзора: вся арена в кадре (демо и отладка)
+        this.cam.x = g.grid.circle.cx;
+        this.cam.y = g.grid.circle.cy;
+        this.camTarget.x = this.cam.x;
+        this.camTarget.y = this.cam.y;
+        this.cam.zoom = Math.min(this.viewW, this.viewH) / (g.grid.circle.r * 2.1);
+        return;
+      }
+      this.cam.zoom += (targetZoom - this.cam.zoom) * Math.min(1, dt * 3.5);
+
+      var hw = this.viewW / (2 * this.cam.zoom);
+      var hh = this.viewH / (2 * this.cam.zoom);
+      var gw = g.grid.w, gh = g.grid.h;
+      tx = hw * 2 >= gw ? gw / 2 : clamp(tx, hw, gw - hw);
+      ty = hh * 2 >= gh ? gh / 2 : clamp(ty, hh, gh - hh);
+      this.camTarget.x = tx;
+      this.camTarget.y = ty;
+      var k = Math.min(1, dt * 10);
+      this.cam.x += (tx - this.cam.x) * k;
+      this.cam.y += (ty - this.cam.y) * k;
+    }
+
+    worldToScreen(x, y) {
+      return {
+        x: this.viewW / 2 + (x - this.cam.x) * this.cam.zoom,
+        y: this.viewH / 2 + (y - this.cam.y) * this.cam.zoom
+      };
+    }
+
+    screenToWorld(x, y) {
+      return {
+        x: (x - this.viewW / 2) / this.cam.zoom + this.cam.x,
+        y: (y - this.viewH / 2) / this.cam.zoom + this.cam.y
+      };
+    }
+
+    /* ------------------------------- цикл ------------------------------- */
+
+    update(dt) {
+      this.time += dt;
+      if (this.game && this.game.grid.ownerRev !== this.rev) this.rebuild();
+
+      for (var i = this.effects.length - 1; i >= 0; i--) {
+        this.effects[i].t -= dt;
+        if (this.effects[i].t <= 0) this.effects.splice(i, 1);
+      }
+      for (var p = this.particles.length - 1; p >= 0; p--) {
+        var pt = this.particles[p];
+        pt.life -= dt;
+        if (pt.life <= 0) { this.particles.splice(p, 1); continue; }
+        pt.x += pt.vx * dt;
+        pt.y += pt.vy * dt;
+        pt.vx *= 0.93;
+        pt.vy *= 0.93;
+      }
+      if (this.shake > 0) this.shake = Math.max(0, this.shake - dt * 2.4);
+    }
+
+    /* Пастельный фон с мягкими пятнами: градиенты считаются один раз. */
+    buildBackground(W, H) {
+      var cv = document.createElement('canvas');
+      cv.width = Math.max(2, Math.round(W * this.dpr));
+      cv.height = Math.max(2, Math.round(H * this.dpr));
+      var g = cv.getContext('2d');
+      g.scale(this.dpr, this.dpr);
+      var bg = g.createLinearGradient(0, 0, W, H);
+      bg.addColorStop(0, '#eaf3ef');
+      bg.addColorStop(0.55, '#e6eef6');
+      bg.addColorStop(1, '#f2ece1');
+      g.fillStyle = bg;
+      g.fillRect(0, 0, W, H);
+      var blobs = [
+        { x: 0.18, y: 0.16, r: 0.30, c: 'rgba(120, 220, 190, 0.22)' },
+        { x: 0.82, y: 0.22, r: 0.26, c: 'rgba(130, 180, 255, 0.20)' },
+        { x: 0.68, y: 0.86, r: 0.34, c: 'rgba(255, 200, 130, 0.20)' },
+        { x: 0.10, y: 0.78, r: 0.24, c: 'rgba(255, 160, 190, 0.16)' }
+      ];
+      for (var i = 0; i < blobs.length; i++) {
+        var bl = blobs[i];
+        var bx = bl.x * W, by = bl.y * H, br = bl.r * Math.max(W, H);
+        var rg = g.createRadialGradient(bx, by, 0, bx, by, br);
+        rg.addColorStop(0, bl.c);
+        rg.addColorStop(1, 'rgba(255,255,255,0)');
+        g.fillStyle = rg;
+        g.fillRect(bx - br, by - br, br * 2, br * 2);
+      }
+      this.bgCanvas = cv;
+    }
+
+    /* Спрайт мягкого свечения: вместо градиента на каждого игрока каждый кадр. */
+    buildGlow() {
+      var cv = document.createElement('canvas');
+      cv.width = cv.height = 64;
+      var g = cv.getContext('2d');
+      var rg = g.createRadialGradient(32, 32, 0, 32, 32, 32);
+      rg.addColorStop(0, 'rgba(255,255,255,0.55)');
+      rg.addColorStop(0.45, 'rgba(255,255,255,0.20)');
+      rg.addColorStop(1, 'rgba(255,255,255,0)');
+      g.fillStyle = rg;
+      g.fillRect(0, 0, 64, 64);
+      this.glow = cv;
     }
 
     draw(dt) {
@@ -323,73 +604,101 @@
       this.drawMinimap(ctx, W, H);
     }
 
+    /* Круглая «бумажная» арена: заливка только по видимой области,
+     * узор-паттерн создаётся один раз. */
     drawArena(ctx) {
       var g = this.game.grid;
       var z = this.cam.zoom;
+      var c = g.circle || { cx: g.w / 2, cy: g.h / 2, r: Math.min(g.w, g.h) / 2 };
 
-      // тень под «листом» арены
+      // видимый прямоугольник мира — чтобы не заливать всю карту
+      var hw = this.viewW / (2 * z), hh = this.viewH / (2 * z);
+      var vx = Math.max(c.cx - c.r, this.cam.x - hw);
+      var vy = Math.max(c.cy - c.r, this.cam.y - hh);
+      var vw = Math.min(c.cx + c.r, this.cam.x + hw) - vx;
+      var vh = Math.min(c.cy + c.r, this.cam.y + hh) - vy;
+      if (vw <= 0 || vh <= 0) return;
+
+      // мягкая внешняя тень вокруг круга
       ctx.save();
-      ctx.shadowColor = 'rgba(40, 50, 40, 0.16)';
-      ctx.shadowBlur = 18 / z;
-      ctx.shadowOffsetY = 6 / z;
-      ctx.fillStyle = '#f6f2e9';
-      ctx.fillRect(0, 0, g.w, g.h);
+      ctx.beginPath();
+      ctx.arc(c.cx, c.cy, c.r + 1.6, 0, TAU);
+      ctx.fillStyle = 'rgba(46, 54, 44, 0.10)';
+      ctx.fill();
       ctx.restore();
 
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(c.cx, c.cy, c.r, 0, TAU);
+      ctx.clip();
+      ctx.fillStyle = '#f6f2e9';
+      ctx.fillRect(vx, vy, vw, vh);
+
       // точки-сетка
-      if (this.dotPattern) {
-        var pat = ctx.createPattern(this.dotPattern, 'repeat');
-        if (pat) {
-          ctx.save();
-          var scale = 4; // клеток между точками
-          ctx.globalAlpha = 0.5;
-          ctx.fillStyle = pat;
-          var m = new DOMMatrix();
-          if (typeof m.scaleSelf === 'function') {
-            m.scaleSelf(scale / 16, scale / 16);
-            pat.setTransform(m);
-          }
-          ctx.fillRect(0, 0, g.w, g.h);
-          ctx.restore();
+      if (!this.dotPat) {
+        this.dotPat = ctx.createPattern(this.dotPattern, 'repeat');
+        if (this.dotPat && this.dotPat.setTransform && typeof DOMMatrix !== 'undefined') {
+          try { this.dotPat.setTransform(new DOMMatrix().scaleSelf(4 / 16)); } catch (e) {}
         }
       }
+      if (this.dotPat) {
+        ctx.save();
+        ctx.globalAlpha = 0.45;
+        ctx.fillStyle = this.dotPat;
+        ctx.fillRect(vx, vy, vw, vh);
+        ctx.restore();
+      }
 
-      // мягкая внутренняя тень у краёв
-      var inset = 6;
-      var grd = ctx.createLinearGradient(0, 0, 0, inset);
-      grd.addColorStop(0, 'rgba(120,110,90,0.20)');
-      grd.addColorStop(1, 'rgba(120,110,90,0)');
-      ctx.fillStyle = grd;
-      ctx.fillRect(0, 0, g.w, inset);
-      var grd2 = ctx.createLinearGradient(0, g.h, 0, g.h - inset);
-      grd2.addColorStop(0, 'rgba(120,110,90,0.20)');
-      grd2.addColorStop(1, 'rgba(120,110,90,0)');
-      ctx.fillStyle = grd2;
-      ctx.fillRect(0, g.h - inset, g.w, inset);
+      // тень у кромки изнутри
+      if (!this.arenaGrad) {
+        var grd = ctx.createRadialGradient(c.cx, c.cy, c.r * 0.82, c.cx, c.cy, c.r);
+        grd.addColorStop(0, 'rgba(120,110,90,0)');
+        grd.addColorStop(1, 'rgba(120,110,90,0.20)');
+        this.arenaGrad = grd;
+      }
+      ctx.fillStyle = this.arenaGrad;
+      ctx.fillRect(vx, vy, vw, vh);
+      ctx.restore();
 
-      // опасная кромка
+      // светлая кромка и очень мягкий «опасный» обод
+      ctx.beginPath();
+      ctx.arc(c.cx, c.cy, c.r, 0, TAU);
       ctx.lineWidth = 2 / z;
-      ctx.strokeStyle = 'rgba(226,90,74,0.32)';
-      ctx.strokeRect(0.5, 0.5, g.w - 1, g.h - 1);
-      ctx.lineWidth = 14 / z;
-      ctx.strokeStyle = 'rgba(226,90,74,0.07)';
-      ctx.strokeRect(0.5, 0.5, g.w - 1, g.h - 1);
+      ctx.strokeStyle = 'rgba(255,255,255,0.95)';
+      ctx.stroke();
+      ctx.lineWidth = 9 / z;
+      ctx.strokeStyle = 'rgba(90, 84, 66, 0.07)';
+      ctx.stroke();
     }
 
     drawTerritory(ctx) {
-      var g = this.game.grid;
-      var smooth = ctx.imageSmoothingEnabled;
-      ctx.imageSmoothingEnabled = false;
-      // тень
-      ctx.globalAlpha = 0.34;
-      ctx.drawImage(this.shadow, 0, 1.0, g.w, g.h);
-      // заливка
-      ctx.globalAlpha = 1;
-      ctx.drawImage(this.terr, 0, 0, g.w, g.h);
-      // светлый контур
-      ctx.globalAlpha = 1;
-      ctx.drawImage(this.edge, 0, 0, g.w, g.h);
-      ctx.imageSmoothingEnabled = smooth;
+      if (!this.paths.size) return;
+      var ctx2 = ctx;
+      var self = this;
+
+      // тень под «вырезанной» землёй
+      ctx.save();
+      ctx.translate(0, 1.0);
+      ctx.fillStyle = 'rgba(44, 52, 42, 0.13)';
+      this.paths.forEach(function (path) { ctx2.fill(path); });
+      ctx.restore();
+
+      this.paths.forEach(function (path, id) {
+        var skin = self.skinById[id] || PIO.SKINS[0];
+        ctx.fillStyle = skin.land;
+        ctx.fill(path);
+        var pat = self.patternFor(skin);
+        if (pat) {
+          ctx.save();
+          ctx.globalAlpha = 0.42;
+          ctx.fillStyle = pat;
+          ctx.fill(path);
+          ctx.restore();
+        }
+        ctx.strokeStyle = skin.edge || 'rgba(255,255,255,0.85)';
+        ctx.lineWidth = 0.7;
+        ctx.stroke(path);
+      });
     }
 
     drawTrails(ctx) {
@@ -402,27 +711,33 @@
         if (!p.alive) continue;
         var path = p.trailPath;
         if (!path || path.length < 2) continue;
+
+        // длинный след прореживаем: визуально то же, точек вдвое меньше
+        var step = path.length > 90 ? 2 : 1;
         ctx.beginPath();
         ctx.moveTo(path[0].x, path[0].y);
-        for (var k = 1; k < path.length; k++) ctx.lineTo(path[k].x, path[k].y);
+        for (var k = step; k < path.length; k += step) ctx.lineTo(path[k].x, path[k].y);
+        var last = path[path.length - 1];
+        ctx.lineTo(last.x, last.y);
 
-        // ореол
-        ctx.strokeStyle = p.palette.trail;
-        ctx.globalAlpha = 0.16 * this.quality;
-        ctx.lineWidth = 3.4;
-        ctx.stroke();
-
-        // тело
+        var mine = i === 0;
+        if (mine) {
+          ctx.strokeStyle = p.palette.trail;
+          ctx.globalAlpha = 0.15 * this.quality;
+          ctx.lineWidth = 3.2;
+          ctx.stroke();
+        }
         ctx.globalAlpha = 1;
-        ctx.lineWidth = 1.9;
+        ctx.strokeStyle = p.palette.trail;
+        ctx.lineWidth = mine ? 2.0 : 1.7;
         ctx.stroke();
 
-        // светлая сердцевина
-        ctx.globalAlpha = 0.55;
+        ctx.globalAlpha = mine ? 0.5 : 0.32;
         ctx.strokeStyle = '#ffffff';
-        ctx.lineWidth = 0.75;
+        ctx.lineWidth = mine ? 0.75 : 0.55;
         ctx.stroke();
       }
+      ctx.globalAlpha = 1;
       ctx.restore();
     }
 
@@ -463,16 +778,12 @@
         var speedFactor = p.trail && p.trail.size > 0 ? 1 : 0.55;
         var scale = 1.28;
 
-        // мягкий ореол: персонаж читается на любом цвете территории
-        var haloR = i === 0 ? 3.1 : 2.5;
-        var hg = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, haloR);
-        hg.addColorStop(0, 'rgba(255,255,255,0.22)');
-        hg.addColorStop(0.45, p.palette.head + '66');
-        hg.addColorStop(1, 'rgba(255,255,255,0)');
-        ctx.fillStyle = hg;
-        ctx.beginPath();
-        ctx.arc(p.x, p.y, haloR, 0, TAU);
-        ctx.fill();
+        // мягкий ореол: спрайт вместо расчёта градиента в кадре
+        if (!this.glow) this.buildGlow();
+        var haloR = i === 0 ? 3.1 : 2.4;
+        ctx.globalAlpha = i === 0 ? 0.85 : 0.5;
+        ctx.drawImage(this.glow, p.x - haloR, p.y - haloR, haloR * 2, haloR * 2);
+        ctx.globalAlpha = 1;
         PIO.drawSkin(ctx, skin.id, p.x, p.y, p.angle, scale, {
           t: t + p.bob,
           move: speedFactor,
@@ -502,18 +813,22 @@
       ctx.restore();
     }
 
+    /* Мини-карта: перерисовывается в свой маленький canvas не чаще 10 раз в
+     * секунду, в кадре — только дешёвый drawImage. */
     drawMinimap(ctx, W, H) {
       if (!this.minimapOn) return;
-      var g = this.game.grid;
       var small = Math.min(W, H) < 620;
       var size = Math.max(small ? 112 : 168, Math.min(small ? 168 : 248, Math.min(W, H) * (small ? 0.27 : 0.32)));
       var pad = small ? 10 : 16;
       var x = pad;
       var y = H - size - pad;
-      var scale = (size - 10) / Math.max(g.w, g.h);
-      var mw = g.w * scale, mh = g.h * scale;
-      var ox = x + (size - mw) / 2, oy = y + (size - mh) / 2;
       this.minimapRect = { x: x, y: y, size: size };
+
+      if (this._mmDirty || this.time - this._mmLast > 0.1) {
+        this.renderMinimap();
+        this._mmLast = this.time;
+        this._mmDirty = false;
+      }
 
       ctx.save();
       ctx.beginPath();
@@ -523,41 +838,65 @@
       ctx.fill();
       ctx.save();
       ctx.clip();
-
-      // земля игроков — цветными пятнами
-      ctx.imageSmoothingEnabled = true;
-      ctx.drawImage(this.terr, ox, oy, mw, mh);
-
-      // рамка видимой области
-      var vz = this.cam.zoom;
-      var vw = (W / vz) * scale, vh = (H / vz) * scale;
-      var vx = ox + (this.cam.x - W / (2 * vz)) * scale;
-      var vy = oy + (this.cam.y - H / (2 * vz)) * scale;
-      ctx.strokeStyle = 'rgba(29,38,56,0.30)';
-      ctx.lineWidth = 1;
-      ctx.strokeRect(vx, vy, vw, vh);
-
-      // головы
-      for (var i = 0; i < this.game.players.length; i++) {
-        var p = this.game.players[i];
-        if (!p.alive) continue;
-        var px = ox + p.x * scale, py = oy + p.y * scale;
-        ctx.beginPath();
-        ctx.arc(px, py, i === 0 ? 3.6 : 2.4, 0, TAU);
-        ctx.fillStyle = i === 0 ? '#1d2638' : p.palette.land;
-        ctx.fill();
-        if (i === 0) {
-          ctx.strokeStyle = '#fff';
-          ctx.lineWidth = 1.6;
-          ctx.stroke();
-        }
-      }
+      ctx.drawImage(this.mmCanvas, 0, 0, 256, 256, x, y, size, size);
       ctx.restore();
-
       ctx.strokeStyle = 'rgba(40,32,20,0.20)';
       ctx.lineWidth = 1.5;
       ctx.stroke();
       ctx.restore();
+    }
+
+    renderMinimap() {
+      var m = this.mmCtx;
+      var S = 256, g = this.game.grid;
+      var c = g.circle || { cx: g.w / 2, cy: g.h / 2, r: Math.min(g.w, g.h) / 2 };
+      var k = S / (c.r * 2 + 2);
+      m.clearRect(0, 0, S, S);
+
+      m.save();
+      m.beginPath();
+      m.arc(S / 2, S / 2, S / 2 - 1, 0, TAU);
+      m.clip();
+      m.fillStyle = '#f6f2e9';
+      m.fillRect(0, 0, S, S);
+
+      m.save();
+      m.translate(S / 2 - c.cx * k, S / 2 - c.cy * k);
+      m.scale(k, k);
+      var self = this;
+      this.paths.forEach(function (path, id) {
+        var skin = self.skinById[id] || PIO.SKINS[0];
+        m.fillStyle = skin.land;
+        m.fill(path);
+      });
+      m.restore();
+
+      // головы игроков
+      for (var i = 0; i < this.game.players.length; i++) {
+        var p = this.game.players[i];
+        if (!p.alive) continue;
+        var px = S / 2 + (p.x - c.cx) * k;
+        var py = S / 2 + (p.y - c.cy) * k;
+        m.beginPath();
+        m.arc(px, py, i === 0 ? 5 : 3.4, 0, TAU);
+        m.fillStyle = i === 0 ? '#1d2638' : p.palette.head;
+        m.fill();
+        if (i === 0) {
+          m.lineWidth = 2;
+          m.strokeStyle = '#fff';
+          m.stroke();
+        }
+      }
+      m.restore();
+
+      // рамка видимой области
+      var vz = this.cam.zoom;
+      var vw = (this.viewW / vz) * k, vh = (this.viewH / vz) * k;
+      var vx = S / 2 + (this.cam.x - this.viewW / (2 * vz) - c.cx) * k;
+      var vy = S / 2 + (this.cam.y - this.viewH / (2 * vz) - c.cy) * k;
+      m.strokeStyle = 'rgba(29,38,56,0.32)';
+      m.lineWidth = 1.5;
+      m.strokeRect(vx, vy, vw, vh);
     }
   }
 

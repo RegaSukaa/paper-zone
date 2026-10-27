@@ -102,20 +102,20 @@
     }
 
     function minimapLand() {
-      var r = PZ.renderer.minimapRect;
-      if (!r) return 0;
-      var dpr = PZ.renderer.dpr || 1;
-      var ctx = PZ.renderer.canvas.getContext('2d');
+      var R = PZ.renderer;
+      if (!R || !R.mmCanvas) return 0;
+      R.renderMinimap();               // актуальное состояние карты
+      var ctx = R.mmCanvas.getContext('2d');
       var img;
       try {
-        img = ctx.getImageData(r.x * dpr, r.y * dpr, r.size * dpr, r.size * dpr).data;
+        img = ctx.getImageData(0, 0, R.mmCanvas.width, R.mmCanvas.height).data;
       } catch (e) { return 0; }
       var def = (window.PIO && window.PIO.skinById) ? window.PIO.skinById(PZ.save.skinId) : null;
       var hex = (def ? def.land : '#22c39a').replace('#', '');
       var lr = parseInt(hex.slice(0, 2), 16), lg = parseInt(hex.slice(2, 4), 16), lb = parseInt(hex.slice(4, 6), 16);
       var hits = 0;
       for (var i = 0; i < img.length; i += 4) {
-        if (Math.abs(img[i] - lr) + Math.abs(img[i + 1] - lg) + Math.abs(img[i + 2] - lb) < 60) hits++;
+        if (Math.abs(img[i] - lr) + Math.abs(img[i + 1] - lg) + Math.abs(img[i + 2] - lb) < 40) hits++;
       }
       return hits;
     }
@@ -355,6 +355,17 @@
     var playRect = document.getElementById('btn-play').getBoundingClientRect();
     check('кнопка «Играть» крупная', playRect.height >= 44 && playRect.width >= 100,
       { h: Math.round(playRect.height), w: Math.round(playRect.width) });
+    /* Гигиена кадра: во время отрисовки не должны создаваться паттерны,
+     * матрицы и т.п. — раньше createPattern вызывался каждый кадр. */
+    var madePatterns = 0;
+    var proto = window.CanvasRenderingContext2D.prototype;
+    var origPattern = proto.createPattern;
+    proto.createPattern = function () { madePatterns++; return origPattern.apply(this, arguments); };
+    for (var di = 0; di < 10; di++) PZ.renderer.draw(1 / 60);
+    proto.createPattern = origPattern;
+    check('в кадре не создаются паттерны (кэш)', madePatterns === 0, madePatterns);
+    check('контуры территории построены', PZ.renderer.paths.size >= 2, PZ.renderer.paths.size);
+
     check('нет JS-ошибок', window.__errs.length === 0, window.__errs.slice(0, 5));
 
     publish();

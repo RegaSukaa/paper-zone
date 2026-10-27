@@ -72,6 +72,7 @@
       this.difficulty = c.difficulty;
       this.rules = this.buildRules(c);
       this.grid = new C.Grid(c.mapW, c.mapH, MAX_PLAYERS);
+      if (c.shape !== 'rect') this.grid.makeCircle();
       this.rng = C.mulberry32(c.seed >>> 0);
       this.players = [];
       this.time = 0;
@@ -125,7 +126,7 @@
       var total = this.rules.bots + 1;
       var size = this.startSize;
       var cx = grid.w / 2, cy = grid.h / 2;
-      var radius = Math.min(grid.w, grid.h) * 0.3;
+      var radius = (grid.circle ? grid.circle.r : Math.min(grid.w, grid.h) * 0.5) * 0.62;
       var baseAngle = this.rng() * TAU;
       var used = [this.cfg.playerSkin];
 
@@ -238,14 +239,38 @@
     advance(p) {
       var g = this.grid;
       var R = p.radius;
+
+      /* Кромка не убивает. Круглая арена: прижимаем к радиусу и отдаём
+       * игроку касательную составляющую — он скользит вдоль кромки. */
+      if (g.circle) {
+        var circ = g.circle;
+        var ndx = p.x - circ.cx, ndy = p.y - circ.cy;
+        var nd = Math.sqrt(ndx * ndx + ndy * ndy) || 0.0001;
+        var lim = circ.r - R;
+        if (nd > lim) {
+          var nx = ndx / nd, ny = ndy / nd;
+          p.x = circ.cx + nx * lim;
+          p.y = circ.cy + ny * lim;
+          var tx = -ny, ty = nx;
+          var dot = Math.cos(p.angle) * tx + Math.sin(p.angle) * ty;
+          if (Math.abs(dot) > 0.08) {
+            var sgn = dot > 0 ? 1 : -1;
+            p.x += tx * sgn * 0.5;
+            p.y += ty * sgn * 0.5;
+            p.wantAngle = Math.atan2(ty * sgn, tx * sgn);
+          }
+          p.atEdge = true;
+        } else {
+          p.atEdge = false;
+        }
+      }
       if (p.x < R || p.y < R || p.x > g.w - R || p.y > g.h - R) {
         p.x = clamp(p.x, R, g.w - R);
         p.y = clamp(p.y, R, g.h - R);
-        this.kill(p, 'wall');
-        return;
       }
+
       var cx = p.cx, cy = p.cy;
-      if (g.isWall(cx, cy)) { this.kill(p, 'wall'); return; }
+      if (g.isWall(cx, cy)) return;
 
       // столкновения считаем по «ядру» головы: касание должно быть реальным,
       // иначе трёхклеточный след убивает при простом проезде рядом

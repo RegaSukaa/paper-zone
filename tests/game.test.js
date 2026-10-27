@@ -102,13 +102,13 @@ test('детерминизм: одинаковый seed даёт одинако�
 
 test('смерть игрока завершает матч поражением', () => {
   const { game, p } = arena({ mapW: 80, mapH: 80 });
-  place(p, 3, 30, Math.PI);
-  p.x = 1.0;
-  game.advance(p);
+  // край карты больше не убивает — убивает перерезанный след
+  const killer = game.players[1] || game.addPlayer({ id: 2, isBot: true, name: 'Резак', x: 40.5, y: 40.5, angle: 0, skinId: 'robot', startSize: 7 });
+  game.kill(p, 'cut', killer);
   game.checkEnd();
   assert.equal(game.state, 'over');
   assert.equal(game.result.win, false);
-  assert.equal(game.result.reason, 'wall');
+  assert.equal(game.result.reason, 'died');
   assert.equal(typeof game.result.score, 'number');
 });
 

@@ -109,13 +109,41 @@ test('чужой след под головой убивает его владе
   assert.equal(p.kills, 1);
 });
 
-test('граница карты убивает, координаты не улетают за поле', () => {
+test('граница круга не убивает: персонаж скользит по кромке', () => {
   const { game, p } = arena({ mapW: 60, mapH: 60 });
-  place(p, 3, 30, Math.PI);
-  driveAngle(game, 1, Math.PI, 1.5);
-  assert.equal(p.alive, false);
-  assert.equal(p.deathCause, 'wall');
-  assert.ok(p.x >= p.radius - 1e-6 && p.y >= p.radius - 1e-6);
+  const c = game.grid.circle;
+  assert.ok(c, 'у арены есть круг');
+  // ставим близко к кромке и гоним наружу
+  const angOut = 0;
+  place(p, c.cx + c.r - 3, c.cy, angOut);
+  driveAngle(game, 2.5, angOut, 3);
+  assert.equal(p.alive, true, 'о край больше не умирают');
+  const d = Math.hypot(p.x - c.cx, p.y - c.cy);
+  assert.ok(d <= c.r - p.radius + 0.6, `остался внутри круга: ${d.toFixed(2)}`);
+  assert.ok(p.atEdge === true, 'персонаж отмечен как прижатый к кромке');
+});
+
+test('за кромкой круга нет ни земли, ни следа', () => {
+  const { game, p } = arena({ mapW: 60, mapH: 60 });
+  const g = game.grid, c = g.circle;
+  place(p, c.cx + c.r - 2, c.cy, 0);
+  driveAngle(game, 2, 0, 3);
+  for (let i = 0; i < g.size; i++) {
+    if (!g.wall[i]) continue;
+    assert.equal(g.owner[i], 0, 'стена не может быть чьей-то землёй');
+    assert.equal(g.trail[i], 0, 'в стене не бывает следа');
+  }
+});
+
+test('проценты считаются от площади круга, а не прямоугольника', () => {
+  const { game } = arena({ mapW: 100, mapH: 100 });
+  const g = game.grid;
+  const free = g.freeCells();
+  assert.ok(free < g.size * 0.85, `круг занимает меньше прямоугольника: ${free}/${g.size}`);
+  const area = Math.PI * g.circle.r * g.circle.r;
+  assert.ok(Math.abs(free - area) / area < 0.03, `площадь круга совпадает: ${free} vs ${Math.round(area)}`);
+  const cells = g.ownerCount(1);
+  assert.ok(Math.abs(g.percent(1) - cells / free * 100) < 1e-9);
 });
 
 test('лобовое столкновение убивает обоих вне своей земли', () => {

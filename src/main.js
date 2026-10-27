@@ -371,6 +371,7 @@
 
   /* ?play=1 — сразу в бой (демо/скриншоты), ?demo=1 — играет автопилот */
   if (/[?&]play=1/.test(location.search)) setTimeout(startMatch, 60);
+  if (/[?&]overview=1/.test(location.search)) renderer.overview = true;
 
   /* отладочные хуки для браузерных проверок */
   window.__PZ = {
